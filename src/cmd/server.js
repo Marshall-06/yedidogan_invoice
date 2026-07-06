@@ -14,12 +14,33 @@ const { sequelize }       = require('../model');
    Bellik: sync({ alter: true }) diňe ösüş rejimi üçin.
    Önümçilik (production) üçin Sequelize Migrations ulanyň.
 ══════════════════════════════════════════════════════ */
+async function dropLegacyConstraints() {
+  // Köne shema: invoice_items.plu -> products.plu (harytlar indi items tablisasynda).
+  // Faktura setirleri garaşsyz bolmaly — bu FK skanirlenen harytlary saklamaga päsgelçilik edýär.
+  await sequelize.query('ALTER TABLE invoice_items DROP CONSTRAINT IF EXISTS invoice_items_plu_fkey;');
+}
+
 async function start() {
   await sequelize.authenticate();
   console.log('✓ PostgreSQL birikmesi üstünlikli');
 
-  await sequelize.sync({ alter: config.env === 'development' });
-  console.log(`✓ Tablisalar sinhronizasiýa edildi (${config.env})`);
+  await dropLegacyConstraints();
+
+  try {
+    await sequelize.sync({ alter: config.env === 'development' });
+    console.log(`✓ Tablisalar sinhronizasiýa edildi (${config.env})`);
+  } catch (err) {
+    console.warn('⚠ Tablisa sync duýduryşy (serwer dowam edýär):', err.message);
+  }
+
+  await dropLegacyConstraints();
+
+  const itemService = require('../services/item.service');
+  try {
+    await itemService.clearLegacyGeneratedBarcodes();
+  } catch (err) {
+    console.warn('⚠ Barkod arassalama duýduryşy:', err.message);
+  }
 
   app.listen(config.port, () => {
     console.log(`✓ Serwer işleýär → http://localhost:${config.port}`);

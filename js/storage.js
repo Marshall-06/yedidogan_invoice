@@ -19,9 +19,22 @@ async function refreshItems(search) {
    bolany üçin "loose" deňeşdirme ulanýarys */
 function findItem(id){ return ITEM_DB.find(it => String(it.id) === String(id)) || null; }
 function findItemByPlu(plu){ return ITEM_DB.find(it => String(it.plu) === String(plu)) || null; }
+function normalizeDigits(s){ return String(s || '').replace(/\D/g, ''); }
+function comparableKey(s){
+  const d = normalizeDigits(s);
+  if(!d) return null;
+  // leading zero-lary aýyrýarys: "00339" -> "339"
+  return String(parseInt(d, 10));
+}
+function findItemByCode(code){
+  const k = comparableKey(code);
+  if(!k) return null;
+  return ITEM_DB.find(it => comparableKey(it.code) === k) || null;
+}
 function findItemByBarcode(code){
   const c = (code||'').replace(/\s/g,'');
-  return ITEM_DB.find(it => it.barcode === c) || null;
+  if(!c) return null;
+  return ITEM_DB.find(it => (it.barcode||'').replace(/\s/g,'') === c) || null;
 }
 
 /* ══════════════════════════════════════════════════════
@@ -55,6 +68,13 @@ function generateEan13FromPlu(plu, gram){
   const pluDigits  = String(plu||'').replace(/\D/g,'').padStart(5,'0').slice(-5);
   const gramDigits = String(Math.round(parseFloat(gram)||0)).replace(/\D/g,'').padStart(5,'0').slice(-5);
   const base12 = (WEIGHT_BC_PREFIX + pluDigits + gramDigits).slice(0,12);
+  return base12 + ean13Checksum(base12);
+}
+
+function generateEan13FromKey(key, gram){
+  const keyDigits  = String(key||'').replace(/\D/g,'').padStart(5,'0').slice(-5);
+  const gramDigits = String(Math.round(parseFloat(gram)||0)).replace(/\D/g,'').padStart(5,'0').slice(-5);
+  const base12 = (WEIGHT_BC_PREFIX + keyDigits + gramDigits).slice(0,12);
   return base12 + ean13Checksum(base12);
 }
 
@@ -136,12 +156,12 @@ function parseBC(code){
 
   if(n===13){
     const pre = parseInt(code.slice(0,2));
-    const plu = code.slice(2,7);
+    const key = code.slice(2,7);
     const w5  = code.slice(7,12);
     // 00 = terezi agram barkody, 20–29 = içerki agramly barkod.
-    // Gurluş: pre | PLU(5) | agram-gram(5) | kontrol.  gross — GRAMDA.
+    // Gurluş: pre | Kod(5) | NETTO-gram(5) | kontrol.  net — GRAMDA.
     if(pre === 0 || (pre>=20 && pre<=29)){
-      return {fmt: pre===0 ? 'Agram-00' : 'Agram-13', plu:String(parseInt(plu)), gross: parseInt(w5)};
+      return {fmt: pre===0 ? 'Agram-00' : 'Agram-13', code:String(parseInt(key)), net: parseInt(w5)};
     }
     return {fmt:'EAN-13', plu: code.slice(2,7).replace(/^0+/,''), gross:0};
   }
@@ -170,12 +190,15 @@ function buildCSV(rows, delim){
   return rows.map(r => r.map(csvCell).join(delim)).join('\r\n');
 }
 
-/* Delimiteri kesgitlemek (Excel käbir ýurtda ; ulanýar) */
+/* Delimiteri kesgitlemek (Excel: ; , ýa-da tab) */
 function detectDelim(text){
   const head = text.split(/\r?\n/)[0] || '';
-  const c = (head.match(/,/g) || []).length;
+  const t = (head.match(/\t/g) || []).length;
   const s = (head.match(/;/g) || []).length;
-  return s > c ? ';' : ',';
+  const c = (head.match(/,/g) || []).length;
+  if (t > 0 && t >= s && t >= c) return '\t';
+  if (s > 0 && s >= c) return ';';
+  return ',';
 }
 
 /* Doly CSV parser — dyrnaklary we içerki setir geçişlerini goldaýar */

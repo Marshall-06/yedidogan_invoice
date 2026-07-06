@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>Label Zawod — Ammar Sistemasy</title>
+  <title>Zawod — Ammar Sistemasy</title>
   <link
     href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=Roboto+Condensed:wght@300;400;600;700&family=Roboto:wght@300;400;500&display=swap"
     rel="stylesheet" />
@@ -56,63 +56,23 @@
 
         <div class="page-head">
           <h1 class="page-title">Harytlar Bazasy</h1>
-          <!-- <p class="page-sub">Harytlary goşuň, üýtgediň we barkodlaryny görüň. Ähli maglumat brauzerde saklanýar.</p> -->
         </div>
 
-        <!-- ── Täze haryt goşmak formasy (diňe admin) ── -->
-        <div class="card inv-form-card admin-only">
-          <div class="card-head">
-            <h2 id="inv-form-title">＋ Täze haryt goş</h2>
-            <button class="btn btn-ghost" id="inv-cancel-edit" style="display:none" onclick="cancelEditItem()">✕
-              Ýatyr</button>
-          </div>
-          <div class="inv-form">
-            <div class="ff">
-              <label>PLU</label>
-              <input id="if-plu" type="text" placeholder="21025" />
-            </div>
-            <div class="ff grow">
-              <label>Harydyň ady</label>
-              <input id="if-name" type="text" placeholder="Duýgy_Direg zefir 17gr" />
-            </div>
-            <div class="ff">
-              <label>Brutto (g)</label>
-              <input id="if-gram" type="number" min="0" step="1" placeholder="214" />
-            </div>
-            <div class="ff">
-              <label>Ini / Width (mm)</label>
-              <input id="if-mm" type="number" min="0" step="1" placeholder="140" />
-            </div>
-            <div class="ff">
-              <label>Kod</label>
-              <input id="if-code" type="text" placeholder="322" />
-            </div>
-            <div class="ff">
-              <label>Gilza / Tara (g)</label>
-              <input id="if-tare" type="number" min="0" step="1" placeholder="30" />
-            </div>
-            <div class="ff ff-btn">
-              <button class="btn btn-add" id="if-submit" onclick="submitItemForm()">＋ Baza goş</button>
-            </div>
-          </div>
-          <p class="form-hint">Bellik: Barkod el bilen girizilmeýär — haryt goşulanda PLU esasynda EAN-13 barkod
-            awtomatiki döredilýär we sanawda "Barkody görmek" arkaly görkezilýär.</p>
-        </div>
-
-        <!-- ── Harytlaryň tablisaly sanawy (CRUD) ── -->
         <div class="card">
           <div class="card-head">
             <h2>Bazadaky harytlar (<span id="inv-count">0</span>)</h2>
             <div class="card-tools admin-only">
+              <button class="btn btn-sm btn-add" onclick="openNewItem()">＋ Täze haryt goş</button>
               <button class="btn btn-sm btn-edit" onclick="exportItems()" title="Excel-de açylýan CSV faýl">⬇ Excel-e
                 çykar</button>
               <button class="btn btn-sm btn-add" onclick="triggerImport()" title="CSV faýldan haryt almak">⬆ Excel-den
                 al</button>
-              <input id="import-file" type="file" accept=".csv,text/csv" style="display:none"
-                onchange="handleImportFile(this)" />
+              <input id="import-file" type="file"
+                accept=".csv,.txt,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                style="display:none" onchange="handleImportFile(this)" />
             </div>
             <div class="card-search">
-              <input id="inv-search" type="text" placeholder="Gözle: ady, PLU, barkod…" oninput="renderInventory()" />
+              <input id="inv-search" type="text" placeholder="Gözle: ady, PLU, kod…" oninput="renderInventory()" />
             </div>
           </div>
           <div class="tbl-wrap">
@@ -123,10 +83,14 @@
                   <th>PLU</th>
                   <th class="tl">Ady</th>
                   <th>Kod</th>
+                  <th>Netto (g)</th>
                   <th>Brutto (g)</th>
                   <th>Ini (mm)</th>
-                  <th>Gilza (g)</th>
-                  <th>Barkod</th>
+                  <th>Tare/Gilza (g)</th>
+                  <th>Mode</th>
+                  <th>Self</th>
+                  <th>Label</th>
+                  <th>Shop</th>
                   <th style="width:200px">Amallar</th>
                 </tr>
               </thead>
@@ -137,23 +101,113 @@
       </section>
 
       <!-- ════════════════════════════════════════════════════
+     SAHYPA — HARYT GOŞ / ÜÝTGET (aýratyn forma)
+     ════════════════════════════════════════════════════ -->
+      <section class="page admin-only" id="page-inventory-form" style="display:none">
+
+        <div class="page-head inv-form-page-head">
+          <button class="btn btn-ghost" type="button" onclick="cancelEditItem()">← Sanawa gaýt</button>
+          <h1 class="page-title" id="inv-form-title">＋ Täze haryt goş</h1>
+        </div>
+
+        <div class="card inv-form-card">
+          <div class="inv-form">
+            <div class="ff">
+              <label>Kod</label>
+              <input id="if-code" type="text" placeholder="322" />
+            </div>
+            <div class="ff">
+              <label>PLU</label>
+              <input id="if-plu" type="text" placeholder="21025" />
+            </div>
+            <div class="ff grow">
+              <label>Harydyň ady</label>
+              <input id="if-name" type="text" placeholder="Duýgy_Direg zefir 17gr" />
+            </div>
+            <div class="ff">
+              <label>Netto (g)</label>
+              <input id="if-gram" type="number" min="0" step="1" placeholder="214" oninput="recalcItemBrutto()" />
+            </div>
+            <div class="ff">
+              <label>Gilza / Tare (g)</label>
+              <input id="if-tare" type="number" min="0" step="1" placeholder="30" oninput="recalcItemBrutto()" />
+            </div>
+            <div class="ff">
+              <label>Brutto (g)</label>
+              <span class="if-brutto-val" id="if-brutto">—</span>
+            </div>
+            <div class="ff">
+              <label>Ini / Width (mm)</label>
+              <input id="if-mm" type="number" min="0" step="1" placeholder="140" />
+            </div>
+            <div class="ff">
+              <label>Görnüş (Mode)</label>
+              <select id="if-mode">
+                <option value="Ters">Ters</option>
+                <option value="Göni">Göni</option>
+                <option value="Ters+Göni">Ters+Göni</option>
+                <option value="Aýlaw">Aýlaw</option>
+                <option value="Beýleki">Beýleki</option>
+              </select>
+            </div>
+            <div class="ff">
+              <label>Self</label>
+              <input id="if-self" type="text" placeholder="—" />
+            </div>
+            <div class="ff">
+              <label>Label</label>
+              <input id="if-label" type="text" placeholder="—" />
+            </div>
+            <div class="ff">
+              <label>Shop</label>
+              <input id="if-shop" type="text" placeholder="—" />
+            </div>
+            <div class="ff ff-btn">
+              <button class="btn btn-add" id="if-submit" onclick="submitItemForm()">＋ Baza goş</button>
+              <button class="btn btn-ghost" type="button" onclick="cancelEditItem()">✕ Ýatyr</button>
+            </div>
+          </div>
+          <p class="form-hint">Brutto = Netto + Gilza. Barkod diňe Excel import arkaly goşulýar.</p>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
      SAHYPA 2 — FAKTURA DÜZMEK (Invoice Generator)
      ════════════════════════════════════════════════════ -->
       <section class="page admin-only" id="page-invoice" style="display:none">
 
         <div class="action-bar">
-          <h1>⬡ Label Zawod — Çykyş Fakturasy</h1>
-          <button class="btn btn-add" onclick="openItemPicker()">＋ Haryt goş</button>
-          <button class="btn btn-save" onclick="saveInvoice()">✦ Sakla</button>
-          <button class="btn btn-clear" onclick="clearAll()">✕ Arassala</button>
-          <label class="print-qty-lbl" title="Bir blokda näçe rulon (default 2, çap etmezden öň üýtgedip bolýar)">
-            1 blokda rulon:
-            <input id="print-perblock" type="number" min="1" step="1" value="2" class="print-qty-in" />
-          </label>
-          <button class="btn btn-print" onclick="openPrint()">⎙ Çap et</button>
+          <h1>⬡ Zawod — Çykyş Fakturasy</h1>
+          <button class="btn btn-ghost" id="inv-back-list" style="display:none" onclick="showInvoiceList()">← Sanawa
+            gaýt</button>
+          <button class="btn btn-ghost" onclick="newInvoice()">＋ Täze faktura</button>
+          <div class="inv-editor-actions" id="inv-editor-actions" style="display:none">
+            <button class="btn btn-add" onclick="addRow()">＋ Haryt goş</button>
+            <button class="btn btn-edit" onclick="openItemPicker()">Bazadan saýla</button>
+            <button class="btn btn-save" onclick="saveInvoice()">✦ Sakla</button>
+            <button class="btn btn-clear" onclick="clearAll()">✕ Arassala</button>
+            <label class="print-qty-lbl" title="Faktura setirindäki Gapdaky haryt — çapda şol ulanylýar">
+              1 blokda rulon:
+              <input id="print-perblock" type="number" min="1" step="1" value="2" class="print-qty-in"
+                onchange="onPrintPerBlockApply()" onblur="onPrintPerBlockApply()" />
+            </label>
+            <button class="btn btn-print" onclick="openPrint()">⎙ Çap et</button>
+          </div>
         </div>
 
-        <main class="invoice" id="invoice">
+        <div class="card inv-index-card">
+          <div class="card-head">
+            <h2>Soňky fakturalar</h2>
+            <div class="card-tools">
+              <button class="btn btn-sm btn-edit" onclick="refreshInvoicesIndex()">⟳ Täzele</button>
+            </div>
+          </div>
+          <div class="inv-index-body">
+            <div class="inv-index-list" id="inv-index-list"></div>
+          </div>
+        </div>
+
+        <main class="invoice" id="invoice" style="display:none">
 
           <!-- HEADER -->
           <header class="inv-header">
@@ -179,7 +233,7 @@
             </div>
             <div class="mf grow">
               <label class="ml" for="f-zawod">Zawod / Gurama</label>
-              <input class="mi" id="f-zawod" type="text" placeholder="Label Zawodynyň ady…"
+              <input class="mi" id="f-zawod" type="text" placeholder="Zawodynyň ady…"
                 oninput="document.getElementById('org-display').textContent=this.value||'Zawodyň ady'" />
             </div>
             <div class="mf grow">
@@ -214,17 +268,11 @@
               <thead>
                 <tr>
                   <th style="width:22px">#</th>
+                  <th>Kod</th>
                   <th>PLU</th>
-                  <th class="tl" style="min-width:120px">Ady (Name)</th>
-                  <th>Kod (Code)</th>
-                  <th>Ini / Width (mm)</th>
-                  <th>Görnüş (Mode)</th>
-                  <th class="tg">Brutto (g)</th>
-                  <th class="tg">Gilza/Tara (g)</th>
+                  <th class="tl" style="min-width:120px">Ady</th>
                   <th class="tg">Netto (g)</th>
-                  <th>Self</th>
-                  <th>Label</th>
-                  <th>Sklad (Shop)</th>
+                  <th class="tg">Brutto (g)</th>
                   <th>Gapdaky haryt (box_qty)</th>
                   <th style="width:26px"></th>
                 </tr>
@@ -235,7 +283,7 @@
           </div>
 
           <div class="add-wrap">
-            <button class="btn-addrow" onclick="openItemPicker()">＋ Täze setir goş</button>
+            <button class="btn-addrow" onclick="addRow()">＋ Täze setir goş</button>
           </div>
 
           <!-- SIGNATORIES -->
@@ -404,12 +452,28 @@
   </div>
 
   <!-- ════════════════════════════════════════════════════
-     ÇAP — öňünden görnüş (gram/kg saýlap, soňra çap edilýär)
+     ÇAP — öňünden görnüş (default kg, islese gr; A4-e sygýar)
      ════════════════════════════════════════════════════ -->
   <div class="pf-preview-overlay" id="print-preview" onclick="if(event.target===this) closePrintPreview()">
     <div class="pf-preview-box">
       <div class="pf-preview-bar">
         <span class="pf-preview-title">Faktura — öňünden görnüş</span>
+        <div class="pf-preview-opts">
+          <label class="print-opt-lbl">
+            Birlik:
+            <select id="print-unit-preview" class="print-opt-sel" onchange="onPrintOptionsChange()">
+              <option value="kg" selected>kg</option>
+              <option value="gr">gr.</option>
+            </select>
+          </label>
+          <label class="print-opt-lbl">
+            Grid:
+            <select id="print-weight-mode-preview" class="print-opt-sel" onchange="onPrintOptionsChange()">
+              <option value="netto" selected>Netto</option>
+              <option value="brutto">Brutto</option>
+            </select>
+          </label>
+        </div>
         <div class="pf-preview-actions">
           <button class="btn btn-print" onclick="doPrint()">⎙ Çap et</button>
           <button class="btn btn-ghost" onclick="closePrintPreview()">✕ Ýap</button>
@@ -423,6 +487,7 @@
 
   <!-- ── Programma kody (aýratyn böleklere bölünen) ── -->
 
+  <script src="js/lib/xlsx.full.min.js"></script>
   <script src="js/api.js"></script>
   <script src="js/storage.js"></script>
   <script src="js/inventory.js"></script>

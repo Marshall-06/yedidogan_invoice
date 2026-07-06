@@ -71,6 +71,8 @@ const API = {
     list:   ()  => apiRequest('/invoices', { auth: true }),
     get:    (id) => apiRequest('/invoices/' + id, { auth: true }),
     create: (b) => apiRequest('/invoices', { method: 'POST', body: b, auth: true }),
+    update: (id, b) => apiRequest('/invoices/' + id, { method: 'PUT', body: b, auth: true }),
+    patch:  (id, b) => apiRequest('/invoices/' + id, { method: 'PATCH', body: b, auth: true }),
     remove: (id) => apiRequest('/invoices/' + id, { method: 'DELETE', auth: true }),
   },
 

@@ -75,6 +75,25 @@ router.post('/', ctrl.create);
  *                 data: { $ref: '#/components/schemas/Invoice' }
  *       404:
  *         description: Faktura tapylmady
+ *   put:
+ *     tags: [Invoices]
+ *     summary: Fakturany üýtget (diňe admin)
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/InvoiceInput'
+ *     responses:
+ *       200:
+ *         description: Faktura täzelendi
+ *       404:
+ *         description: Faktura tapylmady
  *   delete:
  *     tags: [Invoices]
  *     summary: Faktura poz (diňe admin)
@@ -90,6 +109,8 @@ router.post('/', ctrl.create);
  *         description: Faktura tapylmady
  */
 router.get('/:id', ctrl.getById);
+router.put('/:id', ctrl.update);
+router.patch('/:id', ctrl.update);
 router.delete('/:id', ctrl.remove);
 
 module.exports = router;

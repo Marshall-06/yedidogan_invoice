@@ -24,11 +24,26 @@ function isValidBarcode(code) {
   return ean13Checksum(code.slice(0, 12)) === parseInt(code[12], 10);
 }
 
-function generateEan13FromPlu(plu, gram) {
-  const pluDigits = String(plu || '').replace(/\D/g, '').padStart(5, '0').slice(-5);
-  const gramDigits = String(Math.round(parseFloat(gram) || 0)).replace(/\D/g, '').padStart(5, '0').slice(-5);
-  const base12 = (WEIGHT_BC_PREFIX + pluDigits + gramDigits).slice(0, 12);
+function generateEan13FromKey(key, gram) {
+  const keyDigits = String(key || '').replace(/\D/g, '').padStart(5, '0').slice(-5);
+  const gramDigits = String(Math.round(parseFloat(gram) || 0))
+    .replace(/\D/g, '')
+    .padStart(5, '0')
+    .slice(-5);
+  const base12 = (WEIGHT_BC_PREFIX + keyDigits + gramDigits).slice(0, 12);
   return base12 + ean13Checksum(base12);
 }
 
-module.exports = { TM_GS1_PREFIX, WEIGHT_BC_PREFIX, ean13Checksum, isValidBarcode, generateEan13FromPlu };
+// Backward-compat alias (esasan köne atlandyryşlar üçin).
+function generateEan13FromPlu(plu, gram) {
+  return generateEan13FromKey(plu, gram);
+}
+
+module.exports = {
+  TM_GS1_PREFIX,
+  WEIGHT_BC_PREFIX,
+  ean13Checksum,
+  isValidBarcode,
+  generateEan13FromKey,
+  generateEan13FromPlu,
+};

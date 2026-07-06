@@ -5,8 +5,8 @@
    Sahypalary görkezýär/gizleýär we hash bilen sinhronizasiýa.
 ══════════════════════════════════════════════════════ */
 
-const PAGES = ['inventory', 'invoice', 'admin'];
-const ADMIN_PAGES = ['invoice', 'admin'];
+const PAGES = ['inventory', 'inventory-form', 'invoice', 'admin'];
+const ADMIN_PAGES = ['inventory-form', 'invoice', 'admin'];
 
 function navigate(page){
   if(!PAGES.includes(page)) page = 'inventory';
@@ -22,16 +22,28 @@ function navigate(page){
   });
 
   document.querySelectorAll('.sb-link').forEach(btn=>{
-    btn.classList.toggle('active', btn.dataset.page === page);
+    const dp = btn.dataset.page;
+    btn.classList.toggle('active', dp === page || (page === 'inventory-form' && dp === 'inventory'));
   });
 
-  if(location.hash !== '#'+page){
+  const hashPage = page === 'inventory-form' ? 'inventory' : page;
+  if(location.hash !== '#'+hashPage && page !== 'inventory-form'){
     history.replaceState(null, '', '#'+page);
+  } else if(page === 'inventory-form' && !location.hash.includes('inventory')){
+    history.replaceState(null, '', '#inventory');
   }
 
-  // Sahypa açylanda degişli maglumaty serwerden täzeden çyz
   if(page === 'inventory') renderInventory();
-  if(page === 'invoice'   && typeof refreshItems === 'function') refreshItems().catch(()=>{});
+  if(page === 'inventory-form'){
+    if(typeof refreshItems === 'function') refreshItems('').catch(()=>{});
+  }
+  if(page === 'invoice'){
+    if(typeof closePrintPreview === 'function') closePrintPreview();
+    if(typeof refreshItems === 'function') refreshItems().catch(()=>{});
+    if(typeof refreshInvoicesIndex === 'function') refreshInvoicesIndex().catch(()=>{});
+    // diňe öňki fakturalar görünsün, editor diňe "Täze faktura"/"Aç" basylanda açylar
+    if(typeof setInvoiceEditorVisible === 'function') setInvoiceEditorVisible(false);
+  }
   if(page === 'admin'     && typeof renderUsers  === 'function') renderUsers();
 
   window.scrollTo({top:0});

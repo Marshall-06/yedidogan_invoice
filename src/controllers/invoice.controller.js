@@ -8,6 +8,8 @@ const invoiceService = require('../services/invoice.service');
    GET    /invoices            → list    (admin)
    GET    /invoices/:id        → getById (admin)
    POST   /invoices            → create  (admin)
+   PUT    /invoices/:id        → update  (admin)
+   PATCH  /invoices/:id        → update  (admin)
    DELETE /invoices/:id        → remove  (admin)
 ══════════════════════════════════════════════════════ */
 const list = asyncHandler(async (req, res) => {
@@ -25,9 +27,14 @@ const create = asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data: invoice });
 });
 
+const update = asyncHandler(async (req, res) => {
+  const invoice = await invoiceService.update(req.params.id, req.body);
+  res.json({ success: true, data: invoice });
+});
+
 const remove = asyncHandler(async (req, res) => {
   const result = await invoiceService.remove(req.params.id);
   res.json({ success: true, data: result });
 });
 
-module.exports = { list, getById, create, remove };
+module.exports = { list, getById, create, update, remove };

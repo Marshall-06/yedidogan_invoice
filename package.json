@@ -1,33 +1,43 @@
 {
   "name": "label-zawod-backend",
   "version": "1.0.0",
-  "description": "Label Zawod ammar sistemasy - Node/Express + PostgreSQL/Sequelize backend",
   "main": "src/cmd/server.js",
+  "bin": "src/cmd/server.js",
+  "pkg": {
+    "assets": [
+      ".env",
+      "index.html",
+      "css/**/*",
+      "js/**/*",
+      "public/**/*",
+      "src/views/**/*",
+      "src/config/**/*",
+      "src/models/**/*",
+      "src/routers/**/*",
+      "node_modules/swagger-ui-dist/**/*"
+    ]
+  },
   "scripts": {
     "start": "node src/cmd/server.js",
-    "dev": "nodemon src/cmd/server.js"
+    "fix-db": "node scripts/drop-invoice-plu-fk.js",
+    "build:exe": "pkg . --targets node18-win-x64 --output yedidogan-zawod.exe"
   },
-  "keywords": [
-    "express",
-    "sequelize",
-    "postgres",
-    "warehouse"
-  ],
-  "license": "MIT",
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
+    "lru-cache": "^7.18.3",
     "morgan": "^1.10.0",
     "pg": "^8.12.0",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.37.3",
     "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.1"
+    "swagger-ui-express": "^5.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "nodemon": "^3.1.4"
+    "pkg": "^5.8.1"
   }
 }

@@ -91,11 +91,15 @@ const options = {
             code: { type: 'string', example: 'S22' },
             tare: { type: 'string', example: '30' },
             barcode: { type: 'string', example: '0002102502142' },
+            mode: { type: 'string', example: 'Ters' },
+            self: { type: 'string', example: '' },
+            label: { type: 'string', example: '' },
+            shop: { type: 'string', example: '' },
           },
         },
         ItemInput: {
           type: 'object',
-          required: ['plu', 'name'],
+          required: ['name', 'code'],
           properties: {
             plu: { type: 'string', example: '21025' },
             name: { type: 'string', example: 'Duýgy_Direg zefir 17gr' },
@@ -103,6 +107,10 @@ const options = {
             mm: { type: 'integer', example: 140 },
             code: { type: 'string', example: 'S22' },
             tare: { type: 'number', example: 30 },
+            mode: { type: 'string', example: 'Ters' },
+            self: { type: 'string', example: '' },
+            label: { type: 'string', example: '' },
+            shop: { type: 'string', example: '' },
           },
         },
         InvoiceItemInput: {
