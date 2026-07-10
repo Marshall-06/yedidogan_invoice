@@ -116,6 +116,31 @@ function getItemsFromRows() {
   return items;
 }
 
+/* Bir çek = bir haryt (kod ýa-da at) */
+function productKey(code, name) {
+  return String(code || name || '').trim();
+}
+
+function getExistingInvoiceProductKey() {
+  for (const item of getItemsFromRows()) {
+    const key = productKey(item.code, item.name);
+    if (key) return key;
+  }
+  return '';
+}
+
+function assertSameInvoiceProduct(code, name) {
+  const existing = getExistingInvoiceProductKey();
+  if (!existing) return true;
+  const next = productKey(code, name);
+  if (!next) return true;
+  if (existing !== next) {
+    alert('Sen ýalňyş çykardyň — bir çekde diňe bir haryt bolmaly!');
+    return false;
+  }
+  return true;
+}
+
 function refreshPfBoxQtysFromRows() {
   if (!pfStates || !pfStates.length) return;
   const items = getItemsFromRows();
@@ -125,9 +150,49 @@ function refreshPfBoxQtysFromRows() {
       st.boxQtys[i] = parseBoxQty(items[idx]?.box_qty);
       idx++;
     }
-    st.bqty = st.boxQtys.reduce((s, q) => s + q, 0);
+    st.bqty = calcPageRulonTotal(st);
   }
   renderPfValues();
+}
+
+/* Sary hat = sütün başyna default 2; jemi hasap = her blok üçin faktura box_qty */
+function calcPageRulonTotal(st) {
+  const { COLS, ROWS, blocks } = st;
+  const sq = st.saryQtys || Array(COLS).fill(2);
+  let placed = 0;
+  let total = 0;
+  outer:
+  for (let ci = 0; ci < COLS; ci++) {
+    for (let ri = 0; ri < ROWS; ri++) {
+      if (placed >= blocks) break outer;
+      total += parseBoxQty(sq[ci], 2);
+      placed++;
+    }
+  }
+  return total;
+}
+
+function updatePfRulonTotals(pi) {
+  const st = pfStates[pi];
+  if (!st) return;
+  st.bqty = calcPageRulonTotal(st);
+  const pageEl = document.querySelector(`.pf-page[data-pi="${pi}"]`);
+  if (!pageEl) return;
+  const t = String(st.bqty);
+  pageEl.querySelectorAll('.pf-rulon-total').forEach(e => { e.textContent = t; });
+  pageEl.querySelectorAll('.pf-rulon').forEach(e => { e.textContent = t; });
+}
+
+function syncSaryQtysFromPreview() {
+  document.querySelectorAll('.pf-sary-in').forEach(inp => {
+    const pi = parseInt(inp.dataset.pi, 10);
+    const col = parseInt(inp.dataset.col, 10);
+    const st = pfStates[pi];
+    if (!st) return;
+    if (!st.saryQtys) st.saryQtys = Array(st.COLS).fill(2);
+    st.saryQtys[col] = parseBoxQty(inp.value, 2);
+    inp.setAttribute('value', inp.value);
+  });
 }
 
 function newInvoice() {
@@ -199,6 +264,7 @@ function renderItemList() {
 function pickItem(id) {
   const it = findItem(id);
   if (!it) return;
+  if (!assertSameInvoiceProduct(it.code, it.name)) return;
   const tare = parseFloat(it.tare) || 0;
   const brutto = +it.gram || 0;
   const net = Math.max(0, Math.round(brutto - tare));
@@ -209,7 +275,7 @@ function pickItem(id) {
     width: it.mm,
     tare,
     net,
-    mode: it.mode || 'Ters',
+    mode: it.mode || '',
     self: it.self || '',
     label: it.label || '',
     shop: it.shop || '',
@@ -229,7 +295,7 @@ function addRow(p) {
     name: p?.name || '',
     code: p?.code || '',
     width: p?.width || '',
-    mode: p?.mode || 'Ters',
+    mode: p?.mode || '',
     net,
     tare,
     gross: net + tare,
@@ -459,7 +525,7 @@ async function loadInvoice(id) {
       name: it.name || '',
       code: it.code || '',
       width: it.width || '',
-      mode: it.mode || 'Ters',
+      mode: it.mode || '',
       net,
       tare,
       gross: net + tare,
@@ -647,6 +713,13 @@ async function refreshInvoicesIndex() {
     document.getElementById('bp-fmt').textContent = res.fmt;
     chips.style.display = 'flex';
 
+    const scanCode = (product && product.code) || res.code || '';
+    const scanName = (product && product.name) || '';
+    if (!assertSameInvoiceProduct(scanCode, scanName)) {
+      inp.value = '';
+      return;
+    }
+
     let tid = emptyRowForScan();
     if (tid === null) { addRow(); tid = emptyRowForScan(); }
     if (tid === null) { showFlash('✗ Ýalňyşlyk', 'err'); return; }
@@ -731,6 +804,13 @@ function buildPrintForma() {
     return false;
   }
 
+  const firstKey = productKey(items[0].code, items[0].name);
+  const mixed = items.some(x => productKey(x.code, x.name) !== firstKey);
+  if (mixed) {
+    alert('Sen ýalňyş çykardyň — bir çekde diňe bir haryt bolmaly!');
+    return false;
+  }
+
   const it = items[0];
   const weights = items.map(x => x.net);
   const grossWeights = items.map(x => x.gross || 0);
@@ -742,7 +822,6 @@ function buildPrintForma() {
   const MAX_ROWS = 10;
 
   const blocks = weights.length;
-  const bqty = boxQtys.reduce((s, q) => s + q, 0);
 
   const blocksPerPage = COLS * MAX_ROWS;
   const pages = Math.max(1, Math.ceil(blocks / blocksPerPage));
@@ -754,18 +833,22 @@ function buildPrintForma() {
     const gw = grossWeights.slice(start, end);
     const tw = tareWeights.slice(start, end);
     const bq = boxQtys.slice(start, end);
-    return {
+    const st = {
       it,
       weights: w,
       grossWeights: gw,
       tareWeights: tw,
       boxQtys: bq,
-      bqty: bq.reduce((s, q) => s + q, 0),
+      saryQtys: Array(COLS).fill(2),
       blocks: w.length,
       COLS,
       ROWS: MAX_ROWS
     };
+    st.bqty = calcPageRulonTotal(st);
+    return st;
   });
+
+  const initBqty = pfStates.reduce((s, st) => s + st.bqty, 0);
 
   const gramVal = it.gross > 0 ? (it.gross / 1000).toFixed(2) + ' kg' : '';
   const iniVal = it.width ? it.width + ' mm' : '';
@@ -812,7 +895,7 @@ function buildPrintForma() {
     <div><span class="flbl pf-brutto-lbl">Brutto, kg:</span><span class="fval pf-brutto">0</span></div>
     <div><span class="flbl pf-gilza-lbl">Gilza, kg:</span><span class="fval pf-gilza">0</span></div>
     <div><span class="flbl pf-netto-lbl">Netto, kg:</span><span class="fval pf-netto">0</span></div>
-    <div><span class="flbl">Jemi rulon:</span><span class="fval pf-rulon">${bqty || 0}</span></div>
+    <div><span class="flbl">Jemi rulon:</span><span class="fval pf-rulon">${initBqty || 0}</span></div>
   </div>
 
   <div class="pf-sigs">
@@ -886,15 +969,16 @@ function renderPfValues() {
     }
 
     const saryCells = Array.from({ length: COLS }, (_, ci) => {
-      let colQty = null;
+      let hasData = false;
       for (let ri = 0; ri < ROWS; ri++) {
-        if (grid[ri][ci] !== null) colQty = qtyGrid[ri][ci];
+        if (grid[ri][ci] !== null) hasData = true;
       }
-      if (colQty === null) return `<td></td>`;
-      return `<td><input class="pf-sary-in" type="number" min="1" step="1" value="${colQty}" data-pi="${idx}" data-col="${ci}" onchange="onPfSaryInput(this)" onblur="onPfSaryInput(this)"/></td>`;
+      if (!hasData) return `<td></td>`;
+      const saryVal = parseBoxQty(st.saryQtys?.[ci], 2);
+      return `<td><input class="pf-sary-in" type="number" min="1" step="1" value="${saryVal}" data-pi="${idx}" data-col="${ci}" onchange="onPfSaryInput(this)" onblur="onPfSaryInput(this)"/></td>`;
     }).join('');
 
-    const pageBqty = boxQtys.reduce((s, q) => s + parseBoxQty(q, 1), 0);
+    const pageBqty = calcPageRulonTotal(st);
     const saryRow = `<tr class="pf-sary-row">
       <td class="td-sary-empty"></td>
       ${saryCells}
@@ -928,38 +1012,13 @@ function renderPfValues() {
 function onPfSaryInput(inp) {
   const pi = parseInt(inp.dataset.pi, 10);
   const col = parseInt(inp.dataset.col, 10);
-  const qty = parseBoxQty(inp.value, 1);
+  const qty = parseBoxQty(inp.value, 2);
   inp.value = qty;
   const st = pfStates[pi];
   if (!st) return;
-
-  const { COLS, ROWS } = st;
-  let globalOffset = 0;
-  for (let p = 0; p < pi; p++) globalOffset += pfStates[p].blocks;
-
-  const trList = document.querySelectorAll('#tbody tr');
-  let placed = 0;
-  outer:
-  for (let ci = 0; ci < COLS; ci++) {
-    for (let ri = 0; ri < ROWS; ri++) {
-      if (placed >= st.blocks) break outer;
-      if (ci === col) {
-        st.boxQtys[placed] = qty;
-        const tr = trList[globalOffset + placed];
-        if (tr) {
-          const id = parseInt(tr.dataset.id, 10);
-          const r = rows.get(id);
-          if (r) r.box_qty = qty;
-          const bqtyEl = document.getElementById('bqty-' + id);
-          if (bqtyEl) bqtyEl.value = qty;
-        }
-      }
-      placed++;
-    }
-  }
-  st.bqty = st.boxQtys.reduce((s, q) => s + q, 0);
-  syncPrintPerBlockFromRows();
-  renderPfValues();
+  if (!st.saryQtys) st.saryQtys = Array(st.COLS).fill(2);
+  st.saryQtys[col] = qty;
+  updatePfRulonTotals(pi);
 }
 
 /* Öňünden görnüş — diňe ekranda, çap bilen birmeňzeş */
@@ -1074,6 +1133,8 @@ function swapUnitsForPrint(on) {
 
 function doPrint() {
   resetPrintLayout();
+  syncSaryQtysFromPreview();
+  pfStates?.forEach((_, pi) => updatePfRulonTotals(pi));
   swapUnitsForPrint(true);
   printFormaViaIframe();
 }

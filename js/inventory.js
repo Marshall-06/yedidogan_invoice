@@ -88,7 +88,7 @@ async function startEditItem(id) {
   IF.gram().value = Math.max(0, Math.round(brutto - tare)) || '';
   IF.tare().value = it.tare || '';
   IF.mm().value = it.mm || '';
-  if (IF.mode()) IF.mode().value = it.mode || 'Ters';
+  if (IF.mode()) IF.mode().value = it.mode || '';
   IF.self().value = it.self || '';
   IF.label().value = it.label || '';
   IF.shop().value = it.shop || '';
@@ -121,7 +121,7 @@ async function submitItemForm() {
     mm: mm || 0,
     code,
     tare: tare || 0,
-    mode: IF.mode()?.value || 'Ters',
+    mode: IF.mode()?.value || null,
     self: IF.self().value.trim(),
     label: IF.label().value.trim(),
     shop: IF.shop().value.trim(),
