@@ -43,6 +43,7 @@ function openLogin(){
   document.getElementById('login-email').value = '';
   document.getElementById('login-name').value  = '';
   document.getElementById('login-code').value  = '';
+  resetLoginCodeVisibility();
   setAuthMode('login');
   document.getElementById('login-modal').classList.add('open');
   setTimeout(()=>{ const e=document.getElementById('login-email'); if(e) e.focus(); }, 50);
@@ -202,6 +203,35 @@ async function renderUsers(){
           : `<button class="btn btn-sm btn-trash" onclick="removeUser(${u.id})">✕ Poz</button>`}
       </td>
     </tr>`).join('');
+}
+
+function toggleLoginCodeVisibility() {
+  const inp = document.getElementById('login-code');
+  const btn = document.getElementById('login-code-toggle');
+  if (!inp || !btn) return;
+  const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  btn.classList.toggle('is-visible', show);
+  btn.title = show ? 'Gizlemek' : 'Görmek';
+  btn.setAttribute('aria-label', show ? 'Kody gizlemek' : 'Kody görmek');
+  const openEye = btn.querySelector('.eye-open');
+  const closedEye = btn.querySelector('.eye-closed');
+  if (openEye) openEye.hidden = show;
+  if (closedEye) closedEye.hidden = !show;
+}
+
+function resetLoginCodeVisibility() {
+  const inp = document.getElementById('login-code');
+  const btn = document.getElementById('login-code-toggle');
+  if (inp) inp.type = 'password';
+  if (!btn) return;
+  btn.classList.remove('is-visible');
+  btn.title = 'Görmek';
+  btn.setAttribute('aria-label', 'Kody görmek');
+  const openEye = btn.querySelector('.eye-open');
+  const closedEye = btn.querySelector('.eye-closed');
+  if (openEye) openEye.hidden = false;
+  if (closedEye) closedEye.hidden = true;
 }
 
 /* ══ BOOT — ähli skriptler ýüklenenden soň işleýär ══════ */

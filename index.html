@@ -20,7 +20,7 @@
     <div class="nav-brand">⬡ Yedidogan Zawod</div>
     <div class="guest-title">Harytlar Bazasy</div>
     <div class="guest-auth" id="guest-auth">
-      <button class="btn btn-add" onclick="openLogin()">Giriş</button>
+      <button class="btn btn-ghost guest-login-btn" onclick="openLogin()">Giriş</button>
     </div>
   </header>
 
@@ -38,11 +38,14 @@
           Bazasy</button>
         <button class="sb-link" data-page="invoice" onclick="navigate('invoice')"><span>🧾</span> Faktura
           Düzmek</button>
+        <button class="sb-link" data-page="production" onclick="navigate('production')"><span>🏭</span> Work Order
+          (ZF)</button>
         <button class="sb-link" data-page="admin" onclick="navigate('admin')"><span>👤</span> Ulanyjylar</button>
+        <button class="sb-link sb-link-logout" type="button" onclick="logout()"><span>⎋</span> Çykmak</button>
       </nav>
       <div class="sb-foot">
         <div class="sb-user" id="sb-user-name">—</div>
-        <button class="sb-logout" onclick="logout()">⎋ Çykmak</button>
+        <button class="sb-logout" type="button" onclick="logout()">⎋ Çykmak</button>
       </div>
     </aside>
 
@@ -59,20 +62,26 @@
         </div>
 
         <div class="card">
-          <div class="card-head">
-            <h2>Bazadaky harytlar (<span id="inv-count">0</span>)</h2>
-            <div class="card-tools admin-only">
-              <button class="btn btn-sm btn-add" onclick="openNewItem()">＋ Täze haryt goş</button>
-              <button class="btn btn-sm btn-edit" onclick="exportItems()" title="Excel-de açylýan CSV faýl">⬇ Excel-e
-                çykar</button>
-              <button class="btn btn-sm btn-add" onclick="triggerImport()" title="CSV faýldan haryt almak">⬆ Excel-den
-                al</button>
-              <input id="import-file" type="file"
-                accept=".csv,.txt,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                style="display:none" onchange="handleImportFile(this)" />
+          <div class="card-head card-head-stack">
+            <div class="card-head-row">
+              <h2>Bazadaky harytlar (<span id="inv-count">0</span>)</h2>
+              <div class="card-search">
+                <input id="inv-search" type="text" placeholder="Gözle: ady, PLU, kod…"
+                  oninput="renderInventoryDebounced()" />
+              </div>
             </div>
-            <div class="card-search">
-              <input id="inv-search" type="text" placeholder="Gözle: ady, PLU, kod…" oninput="renderInventory()" />
+            <div class="card-tools admin-only">
+              <button class="btn btn-sm btn-add" onclick="openNewItem()">＋ Täze haryt</button>
+              <span class="tool-sep" aria-hidden="true"></span>
+              <button class="btn btn-sm btn-edit" onclick="exportItems()" title="Import formaty bilen bir (.xlsx)">⬇
+                Excel çykar</button>
+              <button class="btn btn-sm btn-ghost" onclick="exportItemsTemplate()"
+                title="Diňe başlyk sütunlar — import şablony">📄 Şablon</button>
+              <button class="btn btn-sm btn-ghost" onclick="triggerImport()"
+                title="Excel/CSV: .xlsx .xlsm .xlsb .xls .csv .txt">⬆ Excel al</button>
+              <input id="import-file" type="file"
+                accept=".xlsx,.xlsm,.xlsb,.xls,.ods,.csv,.txt,.tsv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.binary.macroEnabled.12,application/vnd.ms-excel.sheet.macroEnabled.12,text/csv,text/plain"
+                style="display:none" onchange="handleImportFile(this)" />
             </div>
           </div>
           <div class="tbl-wrap">
@@ -83,15 +92,9 @@
                   <th>PLU</th>
                   <th class="tl">Ady</th>
                   <th>Kod</th>
-                  <th>Netto (g)</th>
-                  <th>Brutto (g)</th>
                   <th>Ini (mm)</th>
                   <th>Tare/Gilza (g)</th>
-                  <th>Mode</th>
-                  <th>Self</th>
-                  <th>Label</th>
-                  <th>Shop</th>
-                  <th style="width:200px">Amallar</th>
+                  <th style="width:150px">Amallar</th>
                 </tr>
               </thead>
               <tbody id="inv-tbody"></tbody>
@@ -113,62 +116,36 @@
         <div class="card inv-form-card">
           <div class="inv-form">
             <div class="ff">
-              <label>Kod</label>
-              <input id="if-code" type="text" placeholder="322" />
+              <label>Kod <span class="ff-hint">(boş = awto)</span></label>
+              <input id="if-code" type="text" placeholder="—" oninput="refreshBarcodePreview()" />
             </div>
             <div class="ff">
-              <label>PLU</label>
-              <input id="if-plu" type="text" placeholder="21025" />
+              <label>PLU <span class="ff-hint">(islege görä)</span></label>
+              <input id="if-plu" type="text" placeholder="—" oninput="refreshBarcodePreview()" />
             </div>
             <div class="ff grow">
               <label>Harydyň ady</label>
               <input id="if-name" type="text" placeholder="Duýgy_Direg zefir 17gr" />
             </div>
             <div class="ff">
-              <label>Netto (g)</label>
-              <input id="if-gram" type="number" min="0" step="1" placeholder="214" oninput="recalcItemBrutto()" />
-            </div>
-            <div class="ff">
               <label>Gilza / Tare (g)</label>
-              <input id="if-tare" type="number" min="0" step="1" placeholder="30" oninput="recalcItemBrutto()" />
-            </div>
-            <div class="ff">
-              <label>Brutto (g)</label>
-              <span class="if-brutto-val" id="if-brutto">—</span>
+              <input id="if-tare" type="number" min="0" step="any" placeholder="" />
             </div>
             <div class="ff">
               <label>Ini / Width (mm)</label>
-              <input id="if-mm" type="number" min="0" step="1" placeholder="140" />
+              <input id="if-mm" type="number" min="0" step="any" placeholder="140" />
             </div>
-            <div class="ff">
-              <label>Görnüş (Mode)</label>
-              <select id="if-mode">
-                <option value="">—</option>
-                <option value="Ters">Ters</option>
-                <option value="Göni">Göni</option>
-                <option value="Ters+Göni">Ters+Göni</option>
-                <option value="Aýlaw">Aýlaw</option>
-                <option value="Beýleki">Beýleki</option>
-              </select>
-            </div>
-            <div class="ff">
-              <label>Self</label>
-              <input id="if-self" type="text" placeholder="—" />
-            </div>
-            <div class="ff">
-              <label>Label</label>
-              <input id="if-label" type="text" placeholder="—" />
-            </div>
-            <div class="ff">
-              <label>Shop</label>
-              <input id="if-shop" type="text" placeholder="—" />
+            <div class="ff grow">
+              <label>Barkod (awto)</label>
+              <span class="if-barcode-val" id="if-barcode-preview">—</span>
             </div>
             <div class="ff ff-btn">
               <button class="btn btn-add" id="if-submit" onclick="submitItemForm()">＋ Baza goş</button>
               <button class="btn btn-ghost" type="button" onclick="cancelEditItem()">✕ Ýatyr</button>
             </div>
           </div>
-          <p class="form-hint">Brutto = Netto + Gilza. Barkod diňe Excel import arkaly goşulýar.</p>
+          <p class="form-hint">Kod we PLU boş başlaýar. Kod boş galdyrylsa saklanda awto artýar (+1); el bilen ýazsaňyz
+            şol ulanylýar. Barkod: <b>00 + 5 san (kod) + 00000 + kontrol</b>.</p>
         </div>
       </section>
 
@@ -179,20 +156,25 @@
 
         <div class="action-bar">
           <h1>⬡ Zawod — Çykyş Fakturasy</h1>
-          <button class="btn btn-ghost" id="inv-back-list" style="display:none" onclick="showInvoiceList()">← Sanawa
-            gaýt</button>
-          <button class="btn btn-ghost" onclick="newInvoice()">＋ Täze faktura</button>
-          <div class="inv-editor-actions" id="inv-editor-actions" style="display:none">
-            <button class="btn btn-add" onclick="addRow()">＋ Haryt goş</button>
-            <button class="btn btn-edit" onclick="openItemPicker()">Bazadan saýla</button>
-            <button class="btn btn-save" onclick="saveInvoice()">✦ Sakla</button>
-            <button class="btn btn-clear" onclick="clearAll()">✕ Arassala</button>
+          <div class="ab-group">
+            <button class="btn btn-inv-back" id="inv-back-list" style="display:none" onclick="showInvoiceList()">←
+              Sanawa
+              gaýt</button>
+            <button class="btn btn-inv-new" onclick="newInvoice()">＋ Täze faktura</button>
+          </div>
+          <div class="ab-group inv-editor-actions" id="inv-editor-actions" style="display:none">
+            <button class="btn btn-inv-row" onclick="addRow()">＋ Setir</button>
+            <button class="btn btn-inv-pick" onclick="openItemPicker()">Bazadan saýla</button>
+            <span class="tool-sep" aria-hidden="true"></span>
+            <button class="btn btn-inv-save" onclick="saveInvoice()">✦ Sakla</button>
+            <button class="btn btn-inv-clear" onclick="clearAll()">✕ Arassala</button>
+            <span class="tool-sep" aria-hidden="true"></span>
             <label class="print-qty-lbl" title="Faktura setirindäki Gapdaky haryt — çapda şol ulanylýar">
               1 blokda rulon:
               <input id="print-perblock" type="number" min="1" step="1" value="2" class="print-qty-in"
                 onchange="onPrintPerBlockApply()" onblur="onPrintPerBlockApply()" />
             </label>
-            <button class="btn btn-print" onclick="openPrint()">⎙ Çap et</button>
+            <button class="btn btn-inv-print" onclick="openPrint()">⎙ Çap et</button>
           </div>
         </div>
 
@@ -233,8 +215,8 @@
                 oninput="document.getElementById('stamp-num').textContent=this.value||'—'" />
             </div>
             <div class="mf grow">
-              <label class="ml" for="f-zawod">Zawod / Gurama</label>
-              <input class="mi" id="f-zawod" type="text" placeholder="Zawodynyň ady…"
+              <label class="ml" for="f-zawod">Haryt ady</label>
+              <input class="mi" id="f-zawod" type="text" placeholder="Haryt ady awto doldurylýar…"
                 oninput="document.getElementById('org-display').textContent=this.value||'Zawodyň ady'" />
             </div>
             <div class="mf grow">
@@ -248,11 +230,11 @@
           </section>
 
           <!-- BARCODE -->
-          <div class="bc-wrap">
-            <span class="bc-ico">▐║▌║▐▌</span>
-            <label class="bc-lbl" for="bc-in">Barkod:</label>
-            <input class="bc-in" id="bc-in" type="text" placeholder="Skanirläň ýa-da el bilen giriziň…"
-              autocomplete="off" spellcheck="false" />
+          <div class="bc-wrap" id="bc-wrap" title="USB/Bluetooth skaner — faktura açyk bolsa göni skanirläň">
+            <span class="bc-ico" aria-hidden="true">▐║▌║▐▌</span>
+            <label class="bc-lbl" for="bc-in">Barkod skaner:</label>
+            <input class="bc-in" id="bc-in" type="text" placeholder="Skaner bilen skanirläň…" autocomplete="off"
+              autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="none" enterkeyhint="done" />
             <div class="bc-chips" id="bc-chips" style="display:none">
               <div class="bc-chip"><span class="bc-chip-l">PLU</span><span class="bc-chip-v" id="bp-plu">—</span></div>
               <div class="bc-chip"><span class="bc-chip-l">Agram / Net</span><span class="bc-chip-v"
@@ -312,6 +294,348 @@
           </footer>
 
         </main>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
+     SAHYPA — ÖNÜMÇILIK BLANKY (ZF)
+     Renkden öň: elde · Renkden soň: default (üýtgedip bolýar)
+     ════════════════════════════════════════════════════ -->
+      <section class="page admin-only" id="page-production" style="display:none">
+
+        <div class="page-head">
+          <h1 class="page-title">Work Order (ZF)</h1>
+          <p class="page-sub">Suratdaky blank ýaly — default maglumatlar üýtgedilmeýär. Diňe başlygy (müşderi, önüm…)
+            dolduryň, saklaň we çap ediň.</p>
+        </div>
+
+        <div class="action-bar">
+          <button class="btn btn-inv-new" type="button" onclick="newProductionOrder()">＋ Täze blank</button>
+          <span id="po-editor-tools" style="display:none">
+            <button class="btn btn-inv-save" id="po-btn-save" type="button" onclick="saveProductionOrder()">💾
+              Sakla</button>
+            <button class="btn btn-inv-pick" type="button" onclick="openPoItemPicker()">Bazadan saýla</button>
+            <button class="btn btn-inv-print" type="button" onclick="printProductionOrder()">⎙ Çap et</button>
+          </span>
+        </div>
+
+        <div class="card">
+          <div class="card-head card-head-stack">
+            <div class="card-head-row">
+              <h2>Öňki blanklar</h2>
+              <div class="card-search">
+                <input id="po-search" type="text" placeholder="ZF, müşderi, önüm…"
+                  oninput="refreshPoIndexDebounced()" />
+              </div>
+            </div>
+          </div>
+          <div id="po-index-list" class="inv-index-list"></div>
+        </div>
+
+        <div id="po-editor" class="po-sheet" style="display:none">
+          <div class="po-sheet-head">
+            <div class="po-brand">YEDIDOGAN NUR<br><small>HOJALYK JEMGYÝETI</small></div>
+            <h2 id="po-form-title">Önümçilik blanky</h2>
+            <div class="po-zf-wrap">
+              <label>ZF №</label>
+              <input id="po-zf" type="text" class="po-input po-zf" placeholder="218" />
+            </div>
+          </div>
+
+          <!-- ELDE: başlyk (renkden öň) -->
+          <div class="po-section">
+            <div class="po-section-title">Başlyk <span class="po-tag">elde</span></div>
+            <div class="po-grid-hdr">
+              <div class="ff"><label>Müşderi</label>
+                <input id="po-musteri" list="po-musteri-list" type="text" placeholder="TUT" />
+                <datalist id="po-musteri-list"></datalist>
+              </div>
+              <div class="ff"><label>Salgysy</label>
+                <input id="po-sargytsy" type="text" placeholder="Arslan …" />
+              </div>
+              <div class="ff"><label>Senesi</label>
+                <input id="po-date" type="date" />
+              </div>
+              <div class="ff grow"><label>Önümiň ady</label>
+                <input id="po-product-name" type="text" placeholder="Napitok" />
+              </div>
+              <div class="ff po-ff-code">
+                <label>Kody <span class="ff-hint">(bazadan)</span></label>
+                <div class="po-code-row">
+                  <input id="po-product-code" type="text" placeholder="TESNE…" onblur="poLookupProduct()" />
+                  <button type="button" class="btn btn-sm btn-inv-pick" onclick="openPoItemPicker()"
+                    title="Harytlar bazasyndan saýla">Bazadan</button>
+                </div>
+              </div>
+              <div class="ff"><label>Sargyt mukdary</label>
+                <input id="po-order-qty" type="text" placeholder="2000kg" />
+              </div>
+              <div class="ff"><label>Tabşyrma möhleti</label>
+                <input id="po-deadline" type="text" placeholder="—" />
+              </div>
+              <div class="ff grow"><label>Işiň ady</label>
+                <input id="po-job-name" type="text" placeholder="—" />
+              </div>
+            </div>
+          </div>
+
+          <div class="po-section po-section-default">
+            <div class="po-section-title">Tehniki parametrler <span class="po-tag po-tag-def">default · üýtgedip
+                bolýar</span></div>
+            <div class="po-grid-tech">
+              <div class="ff"><label>Laminasiýa gyzgynlyk</label><input id="po-tech-lam-gyz" type="text" /></div>
+              <div class="ff"><label>Wal gyzgynlygy</label><input id="po-tech-wal-gyz" type="text" /></div>
+              <div class="ff"><label>Nokat arasy</label><input id="po-tech-nokat" type="text" /></div>
+              <div class="ff"><label>Rulon iç diametri</label><input id="po-tech-ichki" type="text" /></div>
+              <div class="ff"><label>Rul. daş diametri</label><input id="po-tech-dashky" type="text" /></div>
+              <div class="ff"><label>Ini</label><input id="po-tech-ini" type="text" /></div>
+              <div class="ff"><label>Umumy galyňlygy</label><input id="po-tech-umumy" type="text" /></div>
+              <div class="ff"><label>Reňk sany</label><input id="po-tech-renk-sany" type="text" /></div>
+              <div class="ff"><label>Fotosel</label><input id="po-tech-foto" type="text" /></div>
+              <div class="ff"><label>Silindr ölçegi</label><input id="po-tech-silindr" type="text" /></div>
+              <div class="ff"><label>Dr Blade ini</label><input id="po-tech-blade" type="text" /></div>
+              <div class="ff"><label>Peçat görnüşi</label><input id="po-tech-pecat" type="text" /></div>
+              <div class="ff"><label>Silindr ugry</label><input id="po-tech-ugry" type="text" /></div>
+              <div class="ff"><label>Tub sany</label><input id="po-tech-tub" type="text" /></div>
+              <div class="ff"><label>Uzynlygy, MT</label><input id="po-tech-mt" type="text" /></div>
+            </div>
+          </div>
+
+          <div class="po-section">
+            <div class="po-section-title">Renk / kraska <span class="po-tag">elde</span></div>
+            <div class="tbl-wrap">
+              <table class="po-color-table">
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>1</th>
+                    <th>2</th>
+                    <th>3</th>
+                    <th>4</th>
+                    <th>5</th>
+                    <th>6</th>
+                    <th>7</th>
+                    <th>8</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="po-row-lbl">Color</td>
+                    <td><input id="po-c-name-0" class="po-cell" /></td>
+                    <td><input id="po-c-name-1" class="po-cell" /></td>
+                    <td><input id="po-c-name-2" class="po-cell" /></td>
+                    <td><input id="po-c-name-3" class="po-cell" /></td>
+                    <td><input id="po-c-name-4" class="po-cell" /></td>
+                    <td><input id="po-c-name-5" class="po-cell" /></td>
+                    <td><input id="po-c-name-6" class="po-cell" /></td>
+                    <td><input id="po-c-name-7" class="po-cell" /></td>
+                  </tr>
+                  <tr>
+                    <td class="po-row-lbl">Ink</td>
+                    <td><input id="po-c-ink-0" class="po-cell" /></td>
+                    <td><input id="po-c-ink-1" class="po-cell" /></td>
+                    <td><input id="po-c-ink-2" class="po-cell" /></td>
+                    <td><input id="po-c-ink-3" class="po-cell" /></td>
+                    <td><input id="po-c-ink-4" class="po-cell" /></td>
+                    <td><input id="po-c-ink-5" class="po-cell" /></td>
+                    <td><input id="po-c-ink-6" class="po-cell" /></td>
+                    <td><input id="po-c-ink-7" class="po-cell" /></td>
+                  </tr>
+                  <tr>
+                    <td class="po-row-lbl">Vernik</td>
+                    <td><input id="po-c-vernik-0" class="po-cell" /></td>
+                    <td><input id="po-c-vernik-1" class="po-cell" /></td>
+                    <td><input id="po-c-vernik-2" class="po-cell" /></td>
+                    <td><input id="po-c-vernik-3" class="po-cell" /></td>
+                    <td><input id="po-c-vernik-4" class="po-cell" /></td>
+                    <td><input id="po-c-vernik-5" class="po-cell" /></td>
+                    <td><input id="po-c-vernik-6" class="po-cell" /></td>
+                    <td><input id="po-c-vernik-7" class="po-cell" /></td>
+                  </tr>
+                  <tr>
+                    <td class="po-row-lbl">Viscosity</td>
+                    <td><input id="po-c-visc-0" class="po-cell" /></td>
+                    <td><input id="po-c-visc-1" class="po-cell" /></td>
+                    <td><input id="po-c-visc-2" class="po-cell" /></td>
+                    <td><input id="po-c-visc-3" class="po-cell" /></td>
+                    <td><input id="po-c-visc-4" class="po-cell" /></td>
+                    <td><input id="po-c-visc-5" class="po-cell" /></td>
+                    <td><input id="po-c-visc-6" class="po-cell" /></td>
+                    <td><input id="po-c-visc-7" class="po-cell" /></td>
+                  </tr>
+                  <tr>
+                    <td class="po-row-lbl">Start T, PSI</td>
+                    <td><input id="po-c-start-0" class="po-cell" /></td>
+                    <td><input id="po-c-start-1" class="po-cell" /></td>
+                    <td><input id="po-c-start-2" class="po-cell" /></td>
+                    <td><input id="po-c-start-3" class="po-cell" /></td>
+                    <td><input id="po-c-start-4" class="po-cell" /></td>
+                    <td><input id="po-c-start-5" class="po-cell" /></td>
+                    <td><input id="po-c-start-6" class="po-cell" /></td>
+                    <td><input id="po-c-start-7" class="po-cell" /></td>
+                  </tr>
+                  <tr>
+                    <td class="po-row-lbl">Finish T, PSI</td>
+                    <td><input id="po-c-finish-0" class="po-cell" /></td>
+                    <td><input id="po-c-finish-1" class="po-cell" /></td>
+                    <td><input id="po-c-finish-2" class="po-cell" /></td>
+                    <td><input id="po-c-finish-3" class="po-cell" /></td>
+                    <td><input id="po-c-finish-4" class="po-cell" /></td>
+                    <td><input id="po-c-finish-5" class="po-cell" /></td>
+                    <td><input id="po-c-finish-6" class="po-cell" /></td>
+                    <td><input id="po-c-finish-7" class="po-cell" /></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- DEFAULT: renkden soň -->
+          <div class="po-section po-section-default">
+            <div class="po-section-title">Renkden soň <span class="po-tag po-tag-def">default · üýtgedip bolýar</span>
+            </div>
+            <div class="tbl-wrap">
+              <table class="po-color-table">
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>1</th>
+                    <th>2</th>
+                    <th>3</th>
+                    <th>4</th>
+                    <th>5</th>
+                    <th>6</th>
+                    <th>7</th>
+                    <th>8</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="po-row-lbl">Guratma temperatura (100)</td>
+                    <td><input id="po-gur-0" class="po-cell" /></td>
+                    <td><input id="po-gur-1" class="po-cell" /></td>
+                    <td><input id="po-gur-2" class="po-cell" /></td>
+                    <td><input id="po-gur-3" class="po-cell" /></td>
+                    <td><input id="po-gur-4" class="po-cell" /></td>
+                    <td><input id="po-gur-5" class="po-cell" /></td>
+                    <td><input id="po-gur-6" class="po-cell" /></td>
+                    <td><input id="po-gur-7" class="po-cell" /></td>
+                  </tr>
+                  <tr>
+                    <td class="po-row-lbl">Guratma temperatura (160)</td>
+                    <td><input id="po-gurhi-0" class="po-cell" /></td>
+                    <td><input id="po-gurhi-1" class="po-cell" /></td>
+                    <td><input id="po-gurhi-2" class="po-cell" /></td>
+                    <td><input id="po-gurhi-3" class="po-cell" /></td>
+                    <td><input id="po-gurhi-4" class="po-cell" /></td>
+                    <td><input id="po-gurhi-5" class="po-cell" /></td>
+                    <td><input id="po-gurhi-6" class="po-cell" /></td>
+                    <td><input id="po-gurhi-7" class="po-cell" /></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="po-grid-hdr" style="margin-top:10px">
+              <div class="ff"><label>Tizlik m/min</label><input id="po-speed-main" type="text" /></div>
+              <div class="ff"><label>Tizlik (alt) m/min</label><input id="po-speed-alt" type="text" /></div>
+              <div class="ff"><label>Start T, PSI</label><input id="po-start-tpsi" type="text" /></div>
+              <div class="ff"><label>Finish T, PSI</label><input id="po-finish-tpsi" type="text" /></div>
+            </div>
+            <div class="tbl-wrap" style="margin-top:10px">
+              <table class="po-color-table po-times-table">
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>Başlan wagty</th>
+                    <th>Taýýarlyk wagty</th>
+                    <th>Dynan wagty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="po-row-lbl">Peçat</td>
+                    <td><input id="po-t-pecat-b" class="po-cell" /></td>
+                    <td><input id="po-t-pecat-t" class="po-cell" /></td>
+                    <td><input id="po-t-pecat-d" class="po-cell" /></td>
+                  </tr>
+                  <tr>
+                    <td class="po-row-lbl">Laminasiýa</td>
+                    <td><input id="po-t-lam-b" class="po-cell" /></td>
+                    <td><input id="po-t-lam-t" class="po-cell" /></td>
+                    <td><input id="po-t-lam-d" class="po-cell" /></td>
+                  </tr>
+                  <tr>
+                    <td class="po-row-lbl">Kesim</td>
+                    <td><input id="po-t-kes-b" class="po-cell" /></td>
+                    <td><input id="po-t-kes-t" class="po-cell" /></td>
+                    <td><input id="po-t-kes-d" class="po-cell" /></td>
+                  </tr>
+                  <tr>
+                    <td class="po-row-lbl">Upakowka</td>
+                    <td><input id="po-t-up-b" class="po-cell" /></td>
+                    <td><input id="po-t-up-t" class="po-cell" /></td>
+                    <td><input id="po-t-up-d" class="po-cell" /></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="po-grid-hdr">
+              <div class="ff grow"><label>Material</label><input id="po-mat-1" type="text" /></div>
+              <div class="ff"><label>Mikron/Mi</label><input id="po-mat-ratio" type="text" placeholder="38/1000" />
+              </div>
+              <div class="ff grow"><label>Material 2</label><input id="po-mat-2" type="text" /></div>
+              <div class="ff grow"><label>Material 3</label><input id="po-mat-3" type="text" /></div>
+              <div class="ff"><label>Press rolik</label><input id="po-press-rolik" type="text" /></div>
+              <div class="ff"><label>Lamin. press</label><input id="po-lamin-press" type="text" /></div>
+              <div class="ff"><label>Kraska, kg</label><input id="po-kraska" type="text" /></div>
+              <div class="ff"><label>Rastworitel, kg</label><input id="po-rastwor" type="text" /></div>
+              <div class="ff"><label>Kleý, kg</label><input id="po-kley" type="text" /></div>
+              <div class="ff"><label>Cold Seal, kg</label><input id="po-coldseal" type="text" /></div>
+              <div class="ff"><label>Clishe sany</label><input id="po-clishe" type="text" /></div>
+            </div>
+            <div class="po-grid-hdr" style="margin-top:8px">
+              <div class="ff"><label>Upakowka</label>
+                <div class="po-pack-opts">
+                  <label class="po-check"><input id="po-pack-adaty" type="checkbox" /> Adaty</label>
+                  <label class="po-check"><input id="po-pack-korobka" type="checkbox" /> Korobka</label>
+                  <label class="po-check"><input id="po-pack-strec" type="checkbox" /> Streç</label>
+                  <label class="po-check"><input id="po-pack-paddon" type="checkbox" /> Paddon</label>
+                </div>
+              </div>
+              <div class="ff"><label>Rulon ugry (№1–4)</label>
+                <select id="po-orient">
+                  <option value="">—</option>
+                  <option value="1">№1</option>
+                  <option value="2">№2</option>
+                  <option value="3">№3</option>
+                  <option value="4">№4</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="po-section">
+            <div class="po-section-title">Rulon sanawlary <span class="po-tag po-tag-def">default boş · elde
+                doldurylýar</span></div>
+            <div class="po-logs">
+              <div class="po-log po-log-pecat">
+                <div class="po-log-title">Çap edilen rulon sanawy (1–20)</div>
+                <div class="po-log-cells" id="po-pecat-wrap"></div>
+              </div>
+              <div class="po-log po-log-lam">
+                <div class="po-log-title">Laminasiýa edilen rulon sanawy (1–10)</div>
+                <div class="po-log-cells" id="po-lam-wrap"></div>
+              </div>
+              <div class="po-log po-log-kes">
+                <div class="po-log-title">Kesilen rulon sanawy (1–10)</div>
+                <div class="po-log-cells" id="po-kes-wrap"></div>
+              </div>
+              <div class="po-log po-log-up">
+                <div class="po-log-title">Upakowka</div>
+                <label class="po-check"><input id="po-upakowka" type="checkbox" /> Taýýar</label>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- ════════════════════════════════════════════════════
@@ -405,7 +729,23 @@
         </div>
         <div class="auth-field">
           <label for="login-code">Kod</label>
-          <input id="login-code" type="password" placeholder="••••" autocomplete="current-password" />
+          <div class="auth-pass-wrap">
+            <input id="login-code" type="password" placeholder="••••" autocomplete="current-password" />
+            <button type="button" class="auth-pass-toggle" id="login-code-toggle" onclick="toggleLoginCodeVisibility()"
+              title="Görmek" aria-label="Kody görmek">
+              <svg class="eye-open" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none"
+                stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1.5 12S5.5 5.5 12 5.5 22.5 12 22.5 12 18.5 18.5 12 18.5 1.5 12 1.5 12z" />
+                <circle cx="12" cy="12" r="3.2" />
+              </svg>
+              <svg class="eye-closed" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none"
+                stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" hidden>
+                <path d="M1.5 12S5.5 5.5 12 5.5 22.5 12 22.5 12 18.5 18.5 12 18.5 1.5 12 1.5 12z" />
+                <circle cx="12" cy="12" r="3.2" />
+                <path d="M4 20L20 4" />
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="auth-error" id="login-error"></div>
         <button id="auth-submit" class="btn btn-add auth-btn" onclick="submitAuth()">Gir →</button>
@@ -415,16 +755,17 @@
     </div>
   </div>
 
-  <!-- ════════ HARYT SAÝLAÝJY POPUP (Faktura sahypasy üçin) ════════ -->
+  <!-- ════════ HARYT SAÝLAÝJY POPUP (Faktura + Work Order) ════════ -->
   <div class="modal-overlay" id="item-modal-overlay" onclick="if(event.target===this) closeItemPicker()">
     <div class="modal-box">
       <div class="modal-head">
-        <h2>Bazadan haryt saýla</h2>
+        <h2 id="item-modal-title">Bazadan haryt saýla</h2>
         <button class="modal-x" onclick="closeItemPicker()">✕</button>
       </div>
       <div class="modal-body">
         <div class="modal-search">
-          <input id="item-search" type="text" placeholder="Gözle: ady, PLU ýa-da barkod…" oninput="renderItemList()" />
+          <input id="item-search" type="text" placeholder="Gözle: ady, PLU ýa-da barkod…"
+            oninput="renderItemListDebounced()" />
         </div>
         <div class="item-list" id="item-list"></div>
         <p class="modal-foot-note">Haryt sanawda ýok bolsa, <b>Harytlar Bazasy</b> sahypasyndan goşuň.</p>
@@ -493,8 +834,32 @@
   <script src="js/storage.js"></script>
   <script src="js/inventory.js"></script>
   <script src="js/invoice.js"></script>
+  <script src="js/production.js"></script>
   <script src="js/router.js"></script>
   <script src="js/auth.js"></script>
+  <script>
+    /* Rulon öýjüklerini döret */
+    (function () {
+      const pecat = document.getElementById('po-pecat-wrap');
+      const lam = document.getElementById('po-lam-wrap');
+      const kes = document.getElementById('po-kes-wrap');
+      if (pecat) {
+        pecat.innerHTML = Array.from({ length: 20 }, (_, i) =>
+          `<label><span>${i + 1}</span><input id="po-pecat-${i}" class="po-cell" /></label>`
+        ).join('');
+      }
+      if (lam) {
+        lam.innerHTML = Array.from({ length: 10 }, (_, i) =>
+          `<label><span>${i + 1}</span><input id="po-lam-${i}" class="po-cell" /></label>`
+        ).join('');
+      }
+      if (kes) {
+        kes.innerHTML = Array.from({ length: 10 }, (_, i) =>
+          `<label><span>${i + 1}</span><input id="po-kes-${i}" class="po-cell" /></label>`
+        ).join('');
+      }
+    })();
+  </script>
 </body>
 
 </html>

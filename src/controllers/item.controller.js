@@ -13,8 +13,28 @@ const itemService = require('../services/item.service');
    POST   /items/import        → bulkUpsert CSV rows (admin)
 ══════════════════════════════════════════════════════ */
 const list = asyncHandler(async (req, res) => {
-  const items = await itemService.list(req.query.search);
-  res.json({ success: true, data: items });
+  const limit = req.query.limit;
+  const offset = req.query.offset;
+  const result = await itemService.list(req.query.search, { limit, offset });
+  res.json({
+    success: true,
+    data: result.items,
+    meta: { total: result.total, limit: result.limit, offset: result.offset },
+  });
+});
+
+const lookup = asyncHandler(async (req, res) => {
+  const q = req.query.q || req.query.code || req.query.barcode || '';
+  const item = await itemService.lookup(q);
+  if (!item) {
+    return res.status(404).json({ success: false, message: 'Haryt tapylmady' });
+  }
+  res.json({ success: true, data: item });
+});
+
+const nextCode = asyncHandler(async (req, res) => {
+  const code = await itemService.nextCode();
+  res.json({ success: true, data: { code } });
 });
 
 const getById = asyncHandler(async (req, res) => {
@@ -45,4 +65,4 @@ const bulkImport = asyncHandler(async (req, res) => {
   res.json({ success: true, data: result });
 });
 
-module.exports = { list, getById, create, update, remove, bulkImport };
+module.exports = { list, getById, create, update, remove, bulkImport, lookup, nextCode };

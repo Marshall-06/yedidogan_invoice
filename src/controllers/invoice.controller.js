@@ -13,7 +13,10 @@ const invoiceService = require('../services/invoice.service');
    DELETE /invoices/:id        → remove  (admin)
 ══════════════════════════════════════════════════════ */
 const list = asyncHandler(async (req, res) => {
-  const invoices = await invoiceService.list();
+  const invoices = await invoiceService.list({
+    limit: req.query.limit,
+    offset: req.query.offset,
+  });
   res.json({ success: true, data: invoices });
 });
 

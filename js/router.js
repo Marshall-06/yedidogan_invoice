@@ -5,8 +5,8 @@
    Sahypalary görkezýär/gizleýär we hash bilen sinhronizasiýa.
 ══════════════════════════════════════════════════════ */
 
-const PAGES = ['inventory', 'inventory-form', 'invoice', 'admin'];
-const ADMIN_PAGES = ['inventory-form', 'invoice', 'admin'];
+const PAGES = ['inventory', 'inventory-form', 'invoice', 'production', 'admin'];
+const ADMIN_PAGES = ['inventory-form', 'invoice', 'production', 'admin'];
 
 function navigate(page){
   if(!PAGES.includes(page)) page = 'inventory';
@@ -35,14 +35,21 @@ function navigate(page){
 
   if(page === 'inventory') renderInventory();
   if(page === 'inventory-form'){
-    if(typeof refreshItems === 'function') refreshItems('').catch(()=>{});
+    if(typeof refreshAllItems === 'function') refreshAllItems('').catch(()=>{});
+    else if(typeof refreshItems === 'function') refreshItems('', { limit: 500, offset: 0 }).catch(()=>{});
   }
   if(page === 'invoice'){
     if(typeof closePrintPreview === 'function') closePrintPreview();
-    if(typeof refreshItems === 'function') refreshItems().catch(()=>{});
+    // Ähli harytlary ýükleme — skan serwerde /lookup bilen işleýär
     if(typeof refreshInvoicesIndex === 'function') refreshInvoicesIndex().catch(()=>{});
-    // diňe öňki fakturalar görünsün, editor diňe "Täze faktura"/"Aç" basylanda açylar
     if(typeof setInvoiceEditorVisible === 'function') setInvoiceEditorVisible(false);
+  }
+  if(page === 'production'){
+    if(typeof loadPoMeta === 'function') loadPoMeta().catch(()=>{});
+    if(typeof refreshPoIndex === 'function') refreshPoIndex().catch(()=>{});
+    if(typeof poEditorOpen !== 'undefined' && !poEditorOpen && typeof setPoEditorVisible === 'function'){
+      setPoEditorVisible(false);
+    }
   }
   if(page === 'admin'     && typeof renderUsers  === 'function') renderUsers();
 

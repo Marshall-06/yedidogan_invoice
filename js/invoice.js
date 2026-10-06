@@ -1,5 +1,7 @@
 'use strict';
 
+/* globals API, escapeHtml, debounce, refreshItems, findItem, findItemByBarcode, findItemByCode, findItemByPlu, lookupItemAsync, parseBC, ITEM_DB, pfStates, refreshInvoicesIndex */
+
 /* ══════════════════════════════════════════════════════
    INVOICE — "Faktura Düzmek" sahypasynyň logikasy
    Setir goşmak, netto/jem hasaplamalar, haryt saýlaýjy
@@ -8,12 +10,213 @@
 
 const MODES = ['Ters', 'Göni', 'Ters+Göni', 'Aýlaw', 'Beýleki'];
 
+function round3(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return 0;
+  return Math.round((x + Number.EPSILON) * 1000) / 1000;
+}
+function fmtWeight(n) {
+  const x = round3(n);
+  if (!x) return '0';
+  return String(x);
+}
+
+/** Çap — tegeklemesiz (152.508 → 152.508, 153 däl) */
+function fmtPrintWeight(grams, unit) {
+  const g = round3(grams);
+  if (!g) return '0';
+  if (unit === 'gr') return String(g);
+  // kg: 152.508 g → 0.152508 (3 onluk gram = 6 onluk kg)
+  const kg = g / 1000;
+  return kg.toFixed(6).replace(/\.?0+$/, '');
+}
+function fmtPrintWeightHdr(grams, unit) {
+  const s = fmtPrintWeight(grams, unit);
+  return unit === 'gr' ? s + ' gr.' : s + ' kg';
+}
+
+/* Çap grid: 15 sütün × 10 setir = bir fakturanyň doly ýeri */
+const INV_GRID_COLS = 15;
+const INV_GRID_ROWS = 10;
+const INV_MAX_BLOCKS = INV_GRID_COLS * INV_GRID_ROWS;
+
 let rid = 0;
 const rows = new Map();
 let currentInvoiceId = null;
+let _invoiceListCache = [];
 
 function setCurrentInvoice(id) {
   currentInvoiceId = id != null ? Number(id) : null;
+}
+
+function countFilledInvoiceRows() {
+  return getItemsFromRows().length;
+}
+
+function suggestNextFakturaNo() {
+  let max = 0;
+  for (const inv of _invoiceListCache) {
+    const d = String(inv.fakturaNo || '').replace(/\D/g, '');
+    if (!d) continue;
+    const n = parseInt(d, 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return String(max + 1);
+}
+
+/* Haryt goşulanda faktura adyna / № awto doldur */
+function syncInvoiceProductMeta(productOrName) {
+  const name = typeof productOrName === 'string'
+    ? productOrName.trim()
+    : String((productOrName && productOrName.name) || '').trim();
+  if (!name) return;
+
+  const zawodEl = document.getElementById('f-zawod');
+  const orgEl = document.getElementById('org-display');
+  if (zawodEl) zawodEl.value = name;
+  if (orgEl) orgEl.textContent = name;
+
+  const numEl = document.getElementById('f-num');
+  const stamp = document.getElementById('stamp-num');
+  if (numEl && !String(numEl.value || '').trim()) {
+    const next = suggestNextFakturaNo();
+    numEl.value = next;
+    if (stamp) stamp.textContent = next;
+  }
+}
+
+function incrementFakturaNo(prev) {
+  const d = String(prev || '').replace(/\D/g, '');
+  if (!d) return suggestNextFakturaNo();
+  return String(parseInt(d, 10) + 1);
+}
+
+/** Faktura API — baza ýalňyşlygynda awtomat repair synag */
+async function postInvoiceToApi(data, isEdit) {
+  const doSave = async () => {
+    if (isEdit) {
+      try {
+        return await API.invoices.update(currentInvoiceId, data);
+      } catch (e) {
+        if (e && e.status === 404) return await API.invoices.patch(currentInvoiceId, data);
+        throw e;
+      }
+    }
+    const saved = await API.invoices.create(data);
+    if (saved && saved.id) setCurrentInvoice(saved.id);
+    return saved;
+  };
+
+  try {
+    return await doSave();
+  } catch (e) {
+    if (typeof isDbRepairableError === 'function' && isDbRepairableError(e) && API.repairDb) {
+      try {
+        await API.repairDb();
+        return await doSave();
+      } catch (repairErr) {
+        throw e;
+      }
+    }
+    throw e;
+  }
+}
+
+function showInvoiceSaveError(e) {
+  const extra = e && e.details && e.details.length ? '\n' + e.details.join('\n') : '';
+  alert('Ýalňyşlyk: ' + (e && e.message ? e.message : String(e)) + extra);
+}
+
+async function saveInvoiceSilent() {
+  const items = [];
+  [...document.querySelectorAll('#tbody tr')].reverse().forEach(tr => {
+    const id = parseInt(tr.dataset.id, 10);
+    syncRowFromDom(id);
+    const r = rows.get(id); if (!r) return;
+    const hasCode = r.code && String(r.code).trim();
+    const hasName = r.name && String(r.name).trim();
+    if (!hasCode && !hasName) return;
+    items.push({
+      plu: (r.plu != null && String(r.plu).trim() !== '' && String(r.plu).trim() !== '0')
+        ? String(r.plu).trim()
+        : null,
+      name: r.name,
+      code: r.code,
+      width: String(r.width || ''),
+      mode: r.mode,
+      gross: r.gross,
+      tare: r.tare,
+      net: r.net,
+      self: r.self,
+      label: r.label,
+      shop: r.shop,
+      boxQty: r.box_qty
+    });
+  });
+  if (items.length === 0) throw new Error('Saklanjak setir ýok');
+
+  const data = {
+    fakturaNo: document.getElementById('f-num').value,
+    zawod: document.getElementById('f-zawod').value,
+    sklad: document.getElementById('f-sklad').value,
+    date: document.getElementById('f-date').value,
+    issued: document.getElementById('f-issued').value,
+    received: document.getElementById('f-recv').value,
+    items
+  };
+
+  let saved;
+  if (currentInvoiceId) {
+    saved = await postInvoiceToApi(data, true);
+  } else {
+    saved = await postInvoiceToApi(data, false);
+  }
+  if (typeof refreshInvoicesIndex === 'function') refreshInvoicesIndex().catch(() => { });
+  return saved;
+}
+
+/* 150 ýer dolanda: alert → sakla → täze faktura (şol haryt ady bilen) */
+async function rollOverFullInvoice() {
+  const productName = (document.getElementById('f-zawod')?.value || '').trim();
+  const prevNo = (document.getElementById('f-num')?.value || '').trim();
+
+  alert(
+    `Faktura doldy!\n` +
+    `${INV_GRID_ROWS} setir × ${INV_GRID_COLS} sütün = ${INV_MAX_BLOCKS} ýer.\n` +
+    `Saklanýar we täze faktura açylýar.`
+  );
+
+  try {
+    await saveInvoiceSilent();
+  } catch (e) {
+    alert('Fakturany saklap bolmady: ' + e.message);
+    return false;
+  }
+
+  newInvoice();
+  if (productName) {
+    const zawodEl = document.getElementById('f-zawod');
+    const orgEl = document.getElementById('org-display');
+    if (zawodEl) zawodEl.value = productName;
+    if (orgEl) orgEl.textContent = productName;
+  }
+  const nextNo = incrementFakturaNo(prevNo);
+  const numEl = document.getElementById('f-num');
+  const stamp = document.getElementById('stamp-num');
+  if (numEl) numEl.value = nextNo;
+  if (stamp) stamp.textContent = nextNo;
+  focusBarcodeInput();
+  return true;
+}
+
+async function ensureInvoiceCapacityForNewRow() {
+  if (countFilledInvoiceRows() < INV_MAX_BLOCKS) return true;
+  return rollOverFullInvoice();
+}
+
+async function checkInvoiceFullAfterAdd() {
+  if (countFilledInvoiceRows() < INV_MAX_BLOCKS) return;
+  await rollOverFullInvoice();
 }
 
 function resetInvoiceFormMeta() {
@@ -23,7 +226,7 @@ function resetInvoiceFormMeta() {
   document.getElementById('f-issued').value = '';
   document.getElementById('f-recv').value = '';
   document.getElementById('stamp-num').textContent = '—';
-  document.getElementById('org-display').textContent = 'Zawodyň ady';
+  document.getElementById('org-display').textContent = 'Haryt ady';
 }
 
 function resetInvoiceRows() {
@@ -42,6 +245,47 @@ function setInvoiceEditorVisible(on) {
   if (actions) actions.style.display = on ? 'flex' : 'none';
   if (indexCard) indexCard.style.display = on ? 'none' : '';
   if (backBtn) backBtn.style.display = on ? '' : 'none';
+  if (on) focusBarcodeInput();
+}
+
+/* Faktura açylanda barkod skan meýdanyna fokus — myszka basmazdan skan */
+function focusBarcodeInput() {
+  const inp = document.getElementById('bc-in');
+  if (!inp) return;
+  const editor = document.getElementById('invoice');
+  if (editor && editor.style.display === 'none') return;
+  setTimeout(() => {
+    try {
+      inp.focus({ preventScroll: true });
+      inp.select();
+    } catch (e) {
+      try { inp.focus(); } catch (_) { /* ignore */ }
+    }
+  }, 30);
+}
+
+function isInvoiceScanReady() {
+  const editor = document.getElementById('invoice');
+  if (!editor || editor.style.display === 'none') return false;
+  const preview = document.getElementById('print-preview');
+  if (preview && preview.classList.contains('open')) return false;
+  if (document.querySelector('.modal-overlay.open')) return false;
+  return true;
+}
+
+/** Skanerden gelen setiri arassala (prefix/suffix, boşluk, Enter galyndysy) */
+function cleanScannerCode(raw) {
+  let s = String(raw == null ? '' : raw)
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+  s = s.replace(/^\][A-Za-z0-9]{0,2}/, '');
+  const digits = s.match(/\d{6,}/g);
+  if (digits && digits.length) {
+    digits.sort((a, b) => b.length - a.length);
+    return digits[0];
+  }
+  return s;
 }
 
 function showInvoiceList() {
@@ -56,18 +300,7 @@ function parseBoxQty(val, fallback = 2) {
 }
 
 function syncPrintPerBlockFromRows() {
-  const pbEl = document.getElementById('print-perblock');
-  if (!pbEl) return;
-  const qtys = [];
-  for (const tr of document.querySelectorAll('#tbody tr')) {
-    const id = parseInt(tr.dataset.id, 10);
-    syncRowFromDom(id);
-    const r = rows.get(id);
-    if (!r || (!r.code && !r.name)) continue;
-    qtys.push(parseBoxQty(r.box_qty));
-  }
-  if (qtys.length === 0) return;
-  if (qtys.every(q => q === qtys[0])) pbEl.value = qtys[0];
+  return;
 }
 
 function getPrintPerBlock() {
@@ -90,9 +323,17 @@ function applyPrintPerBlockToRows(qty) {
 function onPrintPerBlockApply() {
   const pbEl = document.getElementById('print-perblock');
   if (!pbEl) return;
-  const qty = parseBoxQty(pbEl.value);
+
+  const qty = parseBoxQty(pbEl.value, 2);
   pbEl.value = qty;
-  applyPrintPerBlockToRows(qty);
+
+  rows.forEach((r, id) => {
+    r.box_qty = qty;
+    const bqtyEl = document.getElementById('bqty-' + id);
+    if (bqtyEl) bqtyEl.value = qty;
+  });
+
+  refreshPfBoxQtysFromRows();
 }
 
 function onRowBoxQtyChange(id, el) {
@@ -104,14 +345,17 @@ function onRowBoxQtyChange(id, el) {
   refreshPfBoxQtysFromRows();
 }
 
-function getItemsFromRows() {
+/** printOrder=true → çap / skan tertibi (aşakdan ýokary = ilkinji skan öňde) */
+function getItemsFromRows(printOrder = false) {
+  const trs = [...document.querySelectorAll('#tbody tr')];
+  if (printOrder) trs.reverse();
   const items = [];
-  document.querySelectorAll('#tbody tr').forEach(tr => {
+  trs.forEach(tr => {
     const id = parseInt(tr.dataset.id, 10);
     syncRowFromDom(id);
     const r = rows.get(id);
     if (!r || (!r.code && !r.name)) return;
-    items.push({ ...r });
+    items.push({ ...r, _rowId: id });
   });
   return items;
 }
@@ -143,33 +387,87 @@ function assertSameInvoiceProduct(code, name) {
 
 function refreshPfBoxQtysFromRows() {
   if (!pfStates || !pfStates.length) return;
-  const items = getItemsFromRows();
+  const items = getItemsFromRows(true);
   let idx = 0;
   for (const st of pfStates) {
     for (let i = 0; i < st.boxQtys.length; i++) {
-      st.boxQtys[i] = parseBoxQty(items[idx]?.box_qty);
+      st.boxQtys[i] = parseBoxQty(items[idx]?.box_qty, getPrintPerBlock());
       idx++;
     }
+    const meta = buildSaryMetaFromBlocks(st.boxQtys, st.COLS, st.ROWS, getPrintPerBlock());
+    st.saryQtys = meta.saryQtys;
+    st.saryMixed = meta.saryMixed;
+    st.saryColSums = meta.saryColSums;
     st.bqty = calcPageRulonTotal(st);
   }
   renderPfValues();
 }
 
-/* Sary hat = sütün başyna default 2; jemi hasap = her blok üçin faktura box_qty */
+/* Jemi rulon = her setiriň öz box_qty jemi (3+3+3+3+1 = 13) */
 function calcPageRulonTotal(st) {
+  const fallback = getPrintPerBlock();
+  if (Array.isArray(st.boxQtys) && st.boxQtys.length) {
+    return st.boxQtys.reduce((s, q) => s + parseBoxQty(q, fallback), 0);
+  }
   const { COLS, ROWS, blocks } = st;
-  const sq = st.saryQtys || Array(COLS).fill(2);
+  const sq = st.saryQtys || Array(COLS).fill(fallback);
   let placed = 0;
   let total = 0;
   outer:
   for (let ci = 0; ci < COLS; ci++) {
     for (let ri = 0; ri < ROWS; ri++) {
       if (placed >= blocks) break outer;
-      total += parseBoxQty(sq[ci], 2);
+      total += parseBoxQty(sq[ci], fallback);
       placed++;
     }
   }
   return total;
+}
+
+/**
+ * Sütün meta: hemmesi deň bolsa sary = şol san;
+ * dürli bolsa (mysal 3,3,3,3,1) — mixed, görkezmede sütün jemi.
+ */
+function buildSaryMetaFromBlocks(boxQtys, COLS, ROWS, fallback) {
+  const fb = parseBoxQty(fallback, 2);
+  const saryQtys = Array(COLS).fill(fb);
+  const saryMixed = Array(COLS).fill(false);
+  const saryColSums = Array(COLS).fill(0);
+  let placed = 0;
+  for (let ci = 0; ci < COLS; ci++) {
+    if (placed >= boxQtys.length) break;
+    const qs = [];
+    for (let ri = 0; ri < ROWS && placed < boxQtys.length; ri++) {
+      qs.push(parseBoxQty(boxQtys[placed], fb));
+      placed++;
+    }
+    const sum = qs.reduce((a, b) => a + b, 0);
+    const allSame = qs.length > 0 && qs.every(q => q === qs[0]);
+    saryColSums[ci] = sum;
+    saryMixed[ci] = !allSame;
+    saryQtys[ci] = allSame ? qs[0] : sum;
+  }
+  return { saryQtys, saryMixed, saryColSums };
+}
+
+function buildSaryQtysFromBlocks(boxQtys, COLS, ROWS, fallback) {
+  return buildSaryMetaFromBlocks(boxQtys, COLS, ROWS, fallback).saryQtys;
+}
+
+/** Çapdaky box_qty üýtgese — faktura tablisasyndaky Gapdaky haryt hem sinhron */
+function syncInvoiceBoxQtysFromPrintState(st) {
+  if (!st || !Array.isArray(st.boxQtys)) return;
+  const items = getItemsFromRows(true);
+  const start = (st._itemOffset != null) ? st._itemOffset : 0;
+  for (let i = 0; i < st.boxQtys.length; i++) {
+    const item = items[start + i];
+    if (!item || item._rowId == null) continue;
+    const qty = parseBoxQty(st.boxQtys[i], getPrintPerBlock());
+    const r = rows.get(item._rowId);
+    if (r) r.box_qty = qty;
+    const el = document.getElementById('bqty-' + item._rowId);
+    if (el) el.value = qty;
+  }
 }
 
 function updatePfRulonTotals(pi) {
@@ -189,8 +487,8 @@ function syncSaryQtysFromPreview() {
     const col = parseInt(inp.dataset.col, 10);
     const st = pfStates[pi];
     if (!st) return;
-    if (!st.saryQtys) st.saryQtys = Array(st.COLS).fill(2);
-    st.saryQtys[col] = parseBoxQty(inp.value, 2);
+    if (!st.saryQtys) st.saryQtys = Array(st.COLS).fill(getPrintPerBlock());
+    st.saryQtys[col] = parseBoxQty(inp.value, getPrintPerBlock());
     inp.setAttribute('value', inp.value);
   });
 }
@@ -201,7 +499,7 @@ function newInvoice() {
   resetInvoiceFormMeta();
   resetInvoiceRows();
   setInvoiceEditorVisible(true);
-  if (typeof refreshItems === 'function') refreshItems('').catch(() => { });
+  if (typeof refreshItems === 'function') refreshItems('', { limit: 100, offset: 0 }).catch(() => { });
 }
 
 /* ══ INIT ════════════════════════════════════════════════ */
@@ -218,34 +516,57 @@ function newInvoice() {
   });
 })();
 
-/* ══ ITEM PICKER MODAL (bazadan haryt saýlamak) ══ */
-async function openItemPicker() {
+/* ══ ITEM PICKER MODAL (faktura + Work Order) ══ */
+let itemPickerTarget = 'invoice'; // 'invoice' | 'production'
+
+async function openItemPickerFor(target) {
+  itemPickerTarget = target === 'production' ? 'production' : 'invoice';
+  const title = document.getElementById('item-modal-title');
+  if (title) {
+    title.textContent = itemPickerTarget === 'production'
+      ? 'Work Order — bazadan önüm saýla'
+      : 'Bazadan haryt saýla';
+  }
   document.getElementById('item-modal-overlay').classList.add('open');
   document.getElementById('item-search').value = '';
   const list = document.getElementById('item-list');
   list.innerHTML = `<div class="item-empty">Ýüklenýär…</div>`;
-  try { await refreshItems(''); }
-  catch (e) { list.innerHTML = `<div class="item-empty">Serwere birikip bolmady: ${escapeHtml(e.message)}</div>`; return; }
-  renderItemList();
+  await renderItemList();
   setTimeout(() => document.getElementById('item-search').focus(), 50);
 }
-function closeItemPicker() {
-  document.getElementById('item-modal-overlay').classList.remove('open');
+
+async function openItemPicker() {
+  await openItemPickerFor('invoice');
 }
 
-function renderItemList() {
-  const q = (document.getElementById('item-search').value || '').trim().toLowerCase();
-  const list = document.getElementById('item-list');
-  const filtered = ITEM_DB.filter(it => {
-    if (!q) return true;
-    return (it.name || '').toLowerCase().includes(q)
-      || String(it.plu ?? '').toLowerCase().includes(q)
-      || String(it.code ?? '').toLowerCase().includes(q)
-      || (it.barcode || '').toLowerCase().includes(q);
-  });
+function closeItemPicker() {
+  document.getElementById('item-modal-overlay').classList.remove('open');
+  if (itemPickerTarget === 'production') {
+    setTimeout(() => {
+      const el = document.getElementById('po-musteri') || document.getElementById('po-product-code');
+      if (el) el.focus();
+    }, 40);
+    return;
+  }
+  const editor = document.getElementById('invoice');
+  if (editor && editor.style.display !== 'none') focusBarcodeInput();
+}
 
+async function renderItemList() {
+  const q = (document.getElementById('item-search').value || '').trim();
+  const list = document.getElementById('item-list');
+  if (!list) return;
+
+  try {
+    await refreshItems(q, { limit: 80, offset: 0 });
+  } catch (e) {
+    list.innerHTML = `<div class="item-empty">Ýalňyşlyk: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  const filtered = ITEM_DB;
   if (filtered.length === 0) {
-    list.innerHTML = `<div class="item-empty">Haryt tapylmady — "Harytlar Bazasy" sahypasyndan goşuň.</div>`;
+    list.innerHTML = `<div class="item-empty">${q ? 'Tapylmady.' : 'Haryt tapylmady — "Harytlar Bazasy" sahypasyndan goşuň.'}</div>`;
     return;
   }
 
@@ -253,21 +574,33 @@ function renderItemList() {
     <div class="item-card" onclick="pickItem('${it.id}')">
       <div class="ic-info">
         <div class="ic-name">${escapeHtml(it.name || '(adsyz)')}</div>
-        <div class="ic-meta">Kod ${escapeHtml(String(it.code ?? '—'))} · PLU ${escapeHtml(String(it.plu ?? '—'))} · ${it.gram || 0}g · ${it.mm || 0}mm · ${escapeHtml(it.barcode || 'barkodsuz')}</div>
+        <div class="ic-meta">Kod ${escapeHtml(String(it.code ?? '—'))} · PLU ${escapeHtml(String(it.plu ?? '—'))} · ${+it.gram || 0}g · ${it.mm || 0}mm · ${escapeHtml(it.barcode || 'barkodsuz')}</div>
       </div>
       <button class="ic-pick" onclick="event.stopPropagation();pickItem('${it.id}')">Saýla</button>
     </div>
   `).join('');
 }
 
-// Bazadan haryt saýlananda — faktura tablisasyna täze setir goşulýar
-function pickItem(id) {
+const renderItemListDebounced = debounce(() => { renderItemList(); }, 280);
+
+async function pickItem(id) {
   const it = findItem(id);
   if (!it) return;
+
+  if (itemPickerTarget === 'production') {
+    if (typeof applyItemToWorkOrder === 'function') {
+      applyItemToWorkOrder(it);
+    }
+    closeItemPicker();
+    return;
+  }
+
   if (!assertSameInvoiceProduct(it.code, it.name)) return;
-  const tare = parseFloat(it.tare) || 0;
-  const brutto = +it.gram || 0;
-  const net = Math.max(0, Math.round(brutto - tare));
+  await ensureInvoiceCapacityForNewRow();
+  const tare = round3(parseFloat(it.tare) || 0);
+  const brutto = round3(+it.gram || 0);
+  // Brutto = netto + tare. Bazada gram brutto bolsa net = gram - tare.
+  const net = brutto > 0 ? Math.max(0, round3(brutto - tare)) : 0;
   addRow({
     plu: it.plu != null ? String(it.plu) : '',
     name: it.name,
@@ -279,17 +612,22 @@ function pickItem(id) {
     self: it.self || '',
     label: it.label || '',
     shop: it.shop || '',
-    box_qty: 2
+    box_qty: getPrintPerBlock()
   });
+  syncInvoiceProductMeta(it);
   closeItemPicker();
+  await checkInvoiceFullAfterAdd();
 }
 
 /* ══ ADD ROW ═════════════════════════════════════════════ */
 function addRow(p) {
   const id = ++rid;
-  const tare = parseFloat(p?.tare) || 0;
-  const gross = parseFloat(p?.gross) || 0;
-  const net = p?.net != null ? (parseFloat(p.net) || 0) : Math.max(0, gross - tare);
+  const tare = round3(parseFloat(p?.tare) || 0);
+  const grossIn = round3(parseFloat(p?.gross) || 0);
+  const net = p?.net != null ? round3(parseFloat(p.net) || 0) : Math.max(0, round3(grossIn - tare));
+
+  const currentBoxQty = getPrintPerBlock();
+
   rows.set(id, {
     plu: p?.plu || '',
     name: p?.name || '',
@@ -298,17 +636,18 @@ function addRow(p) {
     mode: p?.mode || '',
     net,
     tare,
-    gross: net + tare,
+    gross: round3(net + tare),
     self: p?.self || '',
     label: p?.label || '',
     shop: p?.shop || '',
-    box_qty: p?.box_qty || 2
+    box_qty: p?.box_qty || currentBoxQty
   });
   const tb = document.getElementById('tbody');
   const tr = document.createElement('tr');
   tr.id = 'row-' + id; tr.dataset.id = id;
-  tr.innerHTML = rowHTML(id, tb.rows.length + 1, rows.get(id));
-  tb.appendChild(tr);
+  tr.innerHTML = rowHTML(id, 1, rows.get(id));
+  if (tb.firstChild) tb.insertBefore(tr, tb.firstChild);
+  else tb.appendChild(tr);
   renumber();
   recalc(id);
   return id;
@@ -316,37 +655,51 @@ function addRow(p) {
 
 function rowHTML(id, n, p) {
   const r = p || {};
-  const tare = parseFloat(r.tare) || 0;
-  const gross = parseFloat(r.gross) || 0;
-  const net = r.net != null ? (parseFloat(r.net) || 0) : Math.max(0, gross - tare);
-  const brutto = net + tare;
+  const tare = round3(parseFloat(r.tare) || 0);
+  const gross = round3(parseFloat(r.gross) || 0);
+  const net = r.net != null ? round3(parseFloat(r.net) || 0) : Math.max(0, round3(gross - tare));
+  const brutto = round3(net + tare);
   return `
   <td class="rn" id="rn-${id}">${n}</td>
   <td><input class="ci w-code" id="code-${id}" value="${r.code || ''}" placeholder="S22"
-       oninput="setf(${id},'code',this.value)"/></td>
+        oninput="setf(${id},'code',this.value)"/></td>
   <td><input class="ci w-plu mn" id="plu-${id}" value="${r.plu || ''}" placeholder="21025"
-       oninput="setf(${id},'plu',this.value)"/></td>
+        oninput="setf(${id},'plu',this.value)"/></td>
   <td class="tl"><input class="ci tl w-name" id="name-${id}" value="${r.name || ''}" placeholder="Harydyň ady…"
-       oninput="setf(${id},'name',this.value)"/></td>
-  <td><input class="ci w-med mn" type="number" min="0" step="1" id="net-${id}"
-       value="${net > 0 ? Math.round(net) : ''}" placeholder="0"
-       oninput="onNetto(${id},this.value)"/></td>
+        oninput="setf(${id},'name',this.value)"/></td>
+  <td><input class="ci w-med mn" type="number" min="0" step="any" id="net-${id}"
+        value="${net > 0 ? fmtWeight(net) : ''}" placeholder="0"
+        oninput="onNetto(${id},this.value)"/></td>
   <td><span class="cc" id="gross-${id}">${brutto > 0 ? fg(brutto) : '—'}</span></td>
   <td><input class="ci w-num mn" type="number" min="1" step="1" id="bqty-${id}"
-       value="${r.box_qty || 2}" placeholder="2"
-       onchange="onRowBoxQtyChange(${id},this)" onblur="onRowBoxQtyChange(${id},this)"/></td>
+        value="${parseBoxQty(r.box_qty, getPrintPerBlock())}" placeholder="1"
+        onchange="onRowBoxQtyChange(${id},this)" onblur="onRowBoxQtyChange(${id},this)"/></td>
   <td><button class="btn-del" onclick="delRow(${id})" title="Poz">✕</button></td>`;
 }
 
 /* ══ HANDLERS ════════════════════════════════════════════ */
+function applyTareFromItem(id) {
+  const r = rows.get(id);
+  if (!r) return;
+  let it = null;
+  if (r.code && typeof findItemByCode === 'function') it = findItemByCode(r.code);
+  if (!it && r.plu && typeof findItemByPlu === 'function') it = findItemByPlu(r.plu);
+  if (it && it.tare != null && it.tare !== '') {
+    r.tare = round3(parseFloat(it.tare) || 0);
+    recalc(id);
+  }
+}
+
 function setf(id, f, v) {
   const r = rows.get(id);
   if (r) r[f] = v;
+  if (f === 'code' || f === 'plu') applyTareFromItem(id);
 }
 
 function onNetto(id, v) {
   const r = rows.get(id); if (!r) return;
-  r.net = parseFloat(v) || 0;
+  r.net = round3(parseFloat(String(v).replace(',', '.')) || 0);
+  if (!r.tare && (r.code || r.plu)) applyTareFromItem(id);
   recalc(id);
 }
 
@@ -358,21 +711,22 @@ function syncRowFromDom(id) {
   if (el('plu')) r.plu = el('plu').value;
   if (el('name')) r.name = el('name').value;
   if (el('bqty')) r.box_qty = parseBoxQty(el('bqty').value);
-  r.net = parseFloat(el('net')?.value) || 0;
-  r.gross = (parseFloat(r.net) || 0) + (parseFloat(r.tare) || 0);
+  r.net = round3(parseFloat(String(el('net')?.value || '').replace(',', '.')) || 0);
+  r.gross = round3((parseFloat(r.net) || 0) + (parseFloat(r.tare) || 0));
 }
 
 /* ══ RECALC: Brutto = Netto + Gilza(Tare) ══ */
 function recalc(id) {
   const r = rows.get(id); if (!r) return;
-  r.gross = (parseFloat(r.net) || 0) + (parseFloat(r.tare) || 0);
+  r.net = round3(parseFloat(r.net) || 0);
+  r.tare = round3(parseFloat(r.tare) || 0);
+  r.gross = round3(r.net + r.tare);
   const el = document.getElementById('gross-' + id);
-  if (el) el.textContent = r.gross > 0 ? fg(r.gross) : '—';
+  if (el) el.textContent = r.gross > 0 ? fmtWeight(r.gross) : '—';
   totals();
 }
-
-/* Agram formatlaýjy — gram (bütin san) */
-function fg(n) { return String(Math.round(Number(n) || 0)); }
+/* Agram — 3 onluk (0.598 saklanýar) */
+function fg(n) { return fmtWeight(n); }
 
 /* ══ TOTALS ══════════════════════════════════════════════ */
 function totals() {
@@ -403,9 +757,11 @@ function delRow(id) {
   renumber(); totals();
 }
 function renumber() {
-  document.querySelectorAll('#tbody tr').forEach((tr, i) => {
+  const trs = document.querySelectorAll('#tbody tr');
+  const total = trs.length;
+  trs.forEach((tr, i) => {
     const el = document.getElementById('rn-' + tr.dataset.id);
-    if (el) el.textContent = i + 1;
+    if (el) el.textContent = total - i;
   });
 }
 
@@ -420,7 +776,7 @@ function clearAll() {
 /* ══ SAVE ════════════════════════════════════════════════ */
 async function saveInvoice() {
   const items = [];
-  document.querySelectorAll('#tbody tr').forEach(tr => {
+  [...document.querySelectorAll('#tbody tr')].reverse().forEach(tr => {
     const id = parseInt(tr.dataset.id);
     syncRowFromDom(id);
     const r = rows.get(id); if (!r) return;
@@ -457,30 +813,20 @@ async function saveInvoice() {
     items
   };
 
-  const b = document.querySelector('.btn-save');
-  const o = b.innerHTML;
+  const b = document.querySelector('.btn-inv-save') || document.querySelector('.btn-save');
+  const o = b ? b.innerHTML : '';
   const isEdit = !!currentInvoiceId;
   try {
-    let saved;
-    if (isEdit) {
-      try {
-        saved = await API.invoices.update(currentInvoiceId, data);
-      } catch (e) {
-        if (e && e.status === 404) {
-          saved = await API.invoices.patch(currentInvoiceId, data);
-        } else {
-          throw e;
-        }
-      }
-    } else {
-      saved = await API.invoices.create(data);
-      if (saved && saved.id) setCurrentInvoice(saved.id);
+    const saved = await postInvoiceToApi(data, isEdit);
+    if (b) {
+      b.innerHTML = isEdit ? '✓ Täzelendi' : '✓ Saklandy';
+      b.style.cssText = 'background:#1e6b45;color:#fff';
+      setTimeout(() => { b.innerHTML = o; b.style.cssText = '' }, 1800);
     }
-    b.innerHTML = isEdit ? '✓ Täzelendi' : '✓ Saklandy';
-    b.style.cssText = 'background:#1e6b45;color:#fff';
-    setTimeout(() => { b.innerHTML = o; b.style.cssText = '' }, 1800);
     if (typeof refreshInvoicesIndex === 'function') refreshInvoicesIndex().catch(() => { });
-  } catch (e) { alert('Ýalňyşlyk: ' + e.message) }
+  } catch (e) {
+    showInvoiceSaveError(e);
+  }
 }
 
 async function loadInvoice(id) {
@@ -490,7 +836,7 @@ async function loadInvoice(id) {
   if (!inv) return;
 
   if (typeof refreshItems === 'function') {
-    try { await refreshItems(''); } catch (e) { /* skan üçin keş täzelenmegi gerek däl */ }
+    try { await refreshItems('', { limit: 100, offset: 0 }); } catch (e) { /* skan üçin keş täzelenmegi gerek däl */ }
   }
 
   setCurrentInvoice(inv.id);
@@ -500,26 +846,24 @@ async function loadInvoice(id) {
   document.getElementById('f-num').value = inv.fakturaNo || '';
   document.getElementById('stamp-num').textContent = inv.fakturaNo || '—';
   document.getElementById('f-zawod').value = inv.zawod || '';
-  document.getElementById('org-display').textContent = inv.zawod || 'Zawodyň ady';
+  document.getElementById('org-display').textContent = inv.zawod || 'Haryt ady';
   document.getElementById('f-sklad').value = inv.sklad || '';
   document.getElementById('f-date').value = inv.date || '';
   document.getElementById('f-issued').value = inv.issued || '';
   document.getElementById('f-recv').value = inv.received || '';
 
-  // footer date sync
   const d = inv.date ? new Date(inv.date + 'T12:00:00') : new Date();
   document.getElementById('foot-date').textContent =
     d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
-  // rows
   document.getElementById('tbody').innerHTML = '';
   document.getElementById('tfoot').innerHTML = '';
   rows.clear(); rid = 0;
 
   (inv.items || []).forEach(it => {
-    const gross = parseFloat(it.gross) || 0;
-    const tare = parseFloat(it.tare) || 0;
-    const net = it.net != null ? (parseFloat(it.net) || 0) : Math.max(0, gross - tare);
+    const gross = round3(parseFloat(it.gross) || 0);
+    const tare = round3(parseFloat(it.tare) || 0);
+    const net = it.net != null ? round3(parseFloat(it.net) || 0) : Math.max(0, round3(gross - tare));
     addRow({
       plu: it.plu != null ? String(it.plu) : '',
       name: it.name || '',
@@ -528,7 +872,7 @@ async function loadInvoice(id) {
       mode: it.mode || '',
       net,
       tare,
-      gross: net + tare,
+      gross: round3(net + tare),
       self: it.self || '',
       label: it.label || '',
       shop: it.shop || '',
@@ -554,16 +898,27 @@ async function refreshInvoicesIndex() {
   if (!wrap) return;
   wrap.innerHTML = `<div class="inv-empty">Ýüklenýär…</div>`;
   let list = [];
-  try { list = (await API.invoices.list()) || []; }
+  try { list = (await API.invoices.list({ limit: 50, offset: 0 })) || []; }
   catch (e) { wrap.innerHTML = `<div class="inv-empty">Ýalňyşlyk: ${escapeHtml(e.message)}</div>`; return; }
+  _invoiceListCache = list;
   if (list.length === 0) {
     wrap.innerHTML = `<div class="inv-empty">Faktura ýok.</div>`;
     return;
   }
-  wrap.innerHTML = list.slice(0, 30).map(inv => {
-    const itCount = Array.isArray(inv.items) ? inv.items.length : 0;
-    const title = `#${inv.id}` + (inv.fakturaNo ? ` · № ${escapeHtml(inv.fakturaNo)}` : '');
-    const sub = `${inv.date || '—'} · setir: ${itCount}` + (inv.sklad ? ` · ${escapeHtml(inv.sklad)}` : '');
+  wrap.innerHTML = list.slice(0, 50).map(inv => {
+    const itCount = inv.itemCount != null
+      ? Number(inv.itemCount)
+      : (Array.isArray(inv.items) ? inv.items.length : 0);
+    const productName = inv.productName
+      || (inv.items && inv.items[0] && inv.items[0].name)
+      || inv.zawod
+      || '';
+    const title = `#${inv.id}`
+      + (inv.fakturaNo ? ` · № ${escapeHtml(inv.fakturaNo)}` : '')
+      + (productName ? ` · ${escapeHtml(productName)}` : '');
+    const sub = `${inv.date || '—'} · setir: ${itCount}`
+      + (itCount >= INV_MAX_BLOCKS ? ' · DOLY' : '')
+      + (inv.sklad ? ` · ${escapeHtml(inv.sklad)}` : '');
     return `
       <div class="inv-index-item">
         <div class="inv-index-meta">
@@ -578,9 +933,9 @@ async function refreshInvoicesIndex() {
   }).join('');
 }
 
-/* ══ BARCODE SKAN (faktura sahypasynda) ══════════════════
-   Diňe Enter basylanda işleýär (skaner hem Enter iberýär).
-   Barkod ITEM_DB-den gözlenýär.
+/* ══ BARCODE SKAN — USB / Bluetooth klawiatura-wedge skanerler ══
+   Skaner çalt harplary + Enter/Tab iberýär. Fokus başga ýerde bolsa-da
+   çalt giriziş tanalýar we faktura setirine goşulýar.
 ══════════════════════════════════════════════════════ */
 (function () {
   const inp = document.getElementById('bc-in');
@@ -588,8 +943,20 @@ async function refreshInvoicesIndex() {
   const chips = document.getElementById('bc-chips');
   if (!inp) return;
 
+  const SCAN_GAP_MS = 50;
+  const SCAN_IDLE_MS = 140;
+  const SCAN_MIN_LEN = 6;
+
+  let scanBuf = '';
+  let lastKeyTs = 0;
+  let idleTimer = null;
+  let applyBusy = false;
+  let burstMode = false; // çalt skaner girizişi
+
   function showFlash(msg, type) {
-    flash.textContent = msg; flash.className = 'bc-flash ' + type;
+    if (!flash) return;
+    flash.textContent = msg;
+    flash.className = 'bc-flash ' + type;
     clearTimeout(flash._t);
     flash._t = setTimeout(() => { flash.className = 'bc-flash'; }, 2400);
   }
@@ -610,7 +977,6 @@ async function refreshInvoicesIndex() {
     const r = rows.get(tid); if (!r) return;
 
     const pluEl = document.getElementById('plu-' + tid);
-    // PLU diňe bazadan gelen harytdan — barkoddaky "plu" aslynda köplenç Kod bolýar.
     if (pluEl && product && product.plu != null && String(product.plu).trim() !== '') {
       pluEl.value = String(product.plu).trim();
       r.plu = String(product.plu).trim();
@@ -627,24 +993,23 @@ async function refreshInvoicesIndex() {
       if (nameEl && product.name) { nameEl.value = product.name; r.name = product.name; }
       if (codeEl2 && product.code) { codeEl2.value = product.code; r.code = product.code; }
       if (product.mm != null && product.mm !== '') r.width = String(product.mm);
-      if (product.tare != null && product.tare !== '') r.tare = +product.tare;
+      if (product.tare != null && product.tare !== '') r.tare = round3(+product.tare);
       if (product.mode) r.mode = product.mode;
       if (product.self) r.self = product.self;
       if (product.label) r.label = product.label;
       if (product.shop) r.shop = product.shop;
     }
 
-    // Barkoddan gelen agram NETTO (arassa) bolýar.
-    // Brutto = netto + tare (awtomatik hasaplanýar).
     const resNet = res && typeof res.net === 'number' ? res.net : 0;
     if (resNet > 0) {
       const nEl = document.getElementById('net-' + tid);
-      if (nEl) { nEl.value = String(Math.round(resNet)); r.net = resNet; }
-    } else if (product && product.gram) {
-      const tareVal = (product.tare) ? (+product.tare) : (r.tare || 0);
-      const netVal = Math.max(0, (+product.gram) - tareVal);
+      if (nEl) { nEl.value = fmtWeight(resNet); r.net = round3(resNet); }
+    } else if (product && (+product.gram || 0) > 0) {
+      const tareVal = product.tare != null && product.tare !== '' ? round3(+product.tare) : round3(r.tare || 0);
+      r.tare = tareVal;
+      const netVal = Math.max(0, round3((+product.gram) - tareVal));
       const nEl = document.getElementById('net-' + tid);
-      if (nEl && netVal > 0) { nEl.value = String(Math.round(netVal)); r.net = netVal; }
+      if (nEl && netVal > 0) { nEl.value = fmtWeight(netVal); r.net = netVal; }
     }
 
     recalc(tid);
@@ -655,89 +1020,223 @@ async function refreshInvoicesIndex() {
       tr.style.background = 'rgba(200,168,75,.22)';
       setTimeout(() => { tr.style.background = ''; }, 1000);
     }
-
-    const nEl = document.getElementById('name-' + tid);
-    if (nEl && !nEl.value.trim()) nEl.focus();
-    else {
-      const netEl = document.getElementById('net-' + tid);
-      if (netEl && !netEl.value) netEl.focus();
-    }
   }
 
-  function apply(code) {
-    code = code.trim(); if (!code) return;
-    const normalized = code.replace(/\s/g, '');
+  async function apply(code) {
+    code = cleanScannerCode(code);
+    if (!code || applyBusy) return;
+    applyBusy = true;
+    try {
+      const normalized = code.replace(/\s/g, '');
 
-    const dbByBarcode = findItemByBarcode(normalized);
-    const parsed = parseBC(normalized);
+      const parsed = parseBC(normalized);
+      let product = findItemByBarcode(normalized);
+      if (!product && parsed) {
+        if (parsed.code) product = findItemByCode(parsed.code);
+        if (!product && parsed.plu) product = findItemByPlu(parsed.plu);
+      }
+      if (!product && typeof lookupItemAsync === 'function') {
+        product = await lookupItemAsync(normalized);
+        if (!product && parsed && parsed.code) product = await lookupItemAsync(parsed.code);
+      }
 
-    let product = dbByBarcode;
-    if (!product && parsed) {
-      if (parsed.code) product = findItemByCode(parsed.code);
-      if (!product && parsed.plu) product = findItemByPlu(parsed.plu);
-    }
+      const dbByBarcode = product && (findItemByBarcode(normalized) || product);
 
-    let res = null;
-    if (parsed && (parsed.net > 0 || parsed.code || parsed.plu)) {
-      res = {
-        fmt: dbByBarcode ? 'DB' : parsed.fmt,
-        code: parsed.code || (product && product.code ? String(product.code) : ''),
-        plu: parsed.plu || (product && product.plu ? String(product.plu) : ''),
-        net: parsed.net > 0 ? parsed.net : 0,
-      };
-    } else if (dbByBarcode) {
-      const tareDb = Number(dbByBarcode.tare) || 0;
-      const net = Math.max(0, Math.round((+dbByBarcode.gram || 0) - tareDb));
-      res = {
-        fmt: 'DB',
-        plu: dbByBarcode.plu,
-        code: dbByBarcode.code || '',
-        net,
-      };
-    }
+      let res = null;
+      if (parsed && (parsed.net > 0 || parsed.code || parsed.plu)) {
+        res = {
+          fmt: dbByBarcode ? 'DB' : parsed.fmt,
+          code: parsed.code || (product && product.code ? String(product.code) : ''),
+          plu: parsed.plu || (product && product.plu ? String(product.plu) : ''),
+          net: parsed.net > 0 ? parsed.net : 0,
+        };
+      } else if (product) {
+        const tareDb = round3(Number(product.tare) || 0);
+        const net = Math.max(0, round3((+product.gram || 0) - tareDb));
+        res = {
+          fmt: 'DB',
+          plu: product.plu,
+          code: product.code || '',
+          net,
+        };
+      }
 
-    if (!res) {
-      showFlash('✗ Barkod formaty nädogry ýa-da bazada ýok', 'err');
-      return;
-    }
+      if (!res) {
+        showFlash('✗ Barkod formaty nädogry ýa-da bazada ýok', 'err');
+        return;
+      }
 
-    if (res.net <= 0 && product) {
-      const tareDb = Number(product.tare) || 0;
-      res.net = Math.max(0, Math.round((+product.gram || 0) - tareDb));
-    }
+      if (res.net <= 0 && product) {
+        const tareDb = round3(Number(product.tare) || 0);
+        res.net = Math.max(0, round3((+product.gram || 0) - tareDb));
+      }
 
-    const chipLbl = document.querySelector('#bc-chips .bc-chip-l');
-    if (chipLbl) chipLbl.textContent = res.code ? 'Kod' : 'PLU';
-    document.getElementById('bp-plu').textContent = (res.code || res.plu) || '—';
-    document.getElementById('bp-net').textContent = res.net > 0 ? Math.round(res.net) + ' gr.' : '—';
-    document.getElementById('bp-fmt').textContent = res.fmt;
-    chips.style.display = 'flex';
+      const chipLbl = document.querySelector('#bc-chips .bc-chip-l');
+      if (chipLbl) chipLbl.textContent = res.code ? 'Kod' : 'PLU';
+      const bpPlu = document.getElementById('bp-plu');
+      const bpNet = document.getElementById('bp-net');
+      const bpFmt = document.getElementById('bp-fmt');
+      if (bpPlu) bpPlu.textContent = (res.code || res.plu) || '—';
+      if (bpNet) bpNet.textContent = res.net > 0 ? fmtWeight(res.net) + ' gr.' : '—';
+      if (bpFmt) bpFmt.textContent = res.fmt;
+      if (chips) chips.style.display = 'flex';
 
-    const scanCode = (product && product.code) || res.code || '';
-    const scanName = (product && product.name) || '';
-    if (!assertSameInvoiceProduct(scanCode, scanName)) {
+      const scanCode = (product && product.code) || res.code || '';
+      const scanName = (product && product.name) || '';
+      if (!assertSameInvoiceProduct(scanCode, scanName)) {
+        inp.value = '';
+        return;
+      }
+
+      await ensureInvoiceCapacityForNewRow();
+
+      let tid = emptyRowForScan();
+      if (tid === null) { addRow(); tid = emptyRowForScan(); }
+      if (tid === null) { showFlash('✗ Ýalňyşlyk', 'err'); return; }
+
+      if (product) {
+        fillRow(tid, res, product);
+        syncInvoiceProductMeta(product);
+        showFlash('✓ ' + product.name, 'ok');
+      } else {
+        fillRow(tid, res, null);
+        if (scanName) syncInvoiceProductMeta(scanName);
+        showFlash('⚠ Kod ' + (res.code || res.plu || '—') + ' — bazada ýok, "Harytlar Bazasy"-dan goşuň', 'err');
+      }
+
       inp.value = '';
+      focusBarcodeInput();
+      await checkInvoiceFullAfterAdd();
+    } finally {
+      applyBusy = false;
+      scanBuf = '';
+    }
+  }
+
+  function resetScanBuf() {
+    scanBuf = '';
+    burstMode = false;
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+
+  function scheduleIdleFlush() {
+    // Diňe skaner burst — el bilen haýal ýazmak Enter bilen gutarýar
+    if (!burstMode) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (scanBuf.length >= SCAN_MIN_LEN) {
+        const code = scanBuf;
+        resetScanBuf();
+        apply(code);
+      } else {
+        resetScanBuf();
+      }
+    }, SCAN_IDLE_MS);
+  }
+
+  function isTypingInOtherField(el) {
+    if (!el || el === inp) return false;
+    if (el.isContentEditable) return true;
+    const tag = el.tagName;
+    if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    if (tag === 'INPUT') {
+      const t = (el.type || 'text').toLowerCase();
+      return t !== 'button' && t !== 'submit' && t !== 'checkbox' && t !== 'radio' && t !== 'file' && t !== 'hidden';
+    }
+    return false;
+  }
+
+  // Capture phase — skaner harplary beýleki meýdanlara düşmez ýaly
+  document.addEventListener('keydown', function (e) {
+    if (!isInvoiceScanReady()) return;
+    if (e.isComposing) return;
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+    const active = document.activeElement;
+    const onBc = active === inp;
+    const onOther = isTypingInOtherField(active);
+    const now = performance.now();
+    const gap = now - lastKeyTs;
+
+    // Enter ýa-da Tab = skaner gutardy
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      const fromBuf = scanBuf.length >= SCAN_MIN_LEN;
+      const fromInput = onBc && e.key === 'Enter';
+      if (fromBuf || fromInput) {
+        e.preventDefault();
+        e.stopPropagation();
+        const code = fromBuf ? scanBuf : inp.value;
+        resetScanBuf();
+        apply(code);
+      }
       return;
     }
 
-    let tid = emptyRowForScan();
-    if (tid === null) { addRow(); tid = emptyRowForScan(); }
-    if (tid === null) { showFlash('✗ Ýalňyşlyk', 'err'); return; }
-
-    if (product) {
-      fillRow(tid, res, product);
-      showFlash('✓ ' + product.name, 'ok');
-    } else {
-      fillRow(tid, res, null);
-      showFlash('⚠ Kod ' + (res.code || res.plu || '—') + ' — bazada ýok, "Harytlar Bazasy"-dan goşuň', 'err');
+    if (e.key === 'Escape') {
+      resetScanBuf();
+      if (onBc) inp.value = '';
+      return;
     }
 
-    inp.value = '';
-  }
+    // Diňe görünýän belgi (skaner san iberýär)
+    if (e.key.length !== 1) return;
 
-  inp.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { e.preventDefault(); apply(this.value); }
+    lastKeyTs = now;
+
+    // Haýal ýazmak (el bilen başga meýdanda) — skanere goşma
+    if (onOther && gap > SCAN_GAP_MS && scanBuf.length === 0) {
+      return;
+    }
+
+    // Täze skan başlangyjy
+    if (gap > SCAN_GAP_MS * 4 && scanBuf.length > 0) {
+      scanBuf = '';
+      burstMode = false;
+    }
+
+    if (gap <= SCAN_GAP_MS) burstMode = true;
+    else if (scanBuf.length === 0 && !onBc) burstMode = true; // ilkinji harp fokus ýok ýerde
+
+    const scannerBurst = burstMode || onBc || !onOther;
+
+    if (!scannerBurst && onOther) return;
+
+    // Skaner rejiminde — harpy buffer-e al, beýleki inputa ýazma
+    if (!onBc || (onOther && burstMode)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    scanBuf += e.key;
+    if (!onBc) inp.value = scanBuf;
+
+    scheduleIdleFlush();
+  }, true);
+
+  // Skanerden soň fokus ýitmese — boş ýere basylanda yzyna
+  document.addEventListener('click', function (e) {
+    if (!isInvoiceScanReady()) return;
+    const t = e.target;
+    if (!t) return;
+    if (isTypingInOtherField(t)) return;
+    if (t.closest && (t.closest('button') || t.closest('a') || t.closest('select') || t.closest('.modal-overlay'))) return;
+    // Tablisa öýjükleri: net/code üýtgetmek üçin fokus galsyn
+    if (t.closest && t.closest('#tbody input, #tbody select, #tbody textarea')) return;
+    focusBarcodeInput();
   });
+
+  // Meýdandan çykylanda birneme soň skanere gaýt (skaner taýýar)
+  inp.addEventListener('blur', function () {
+    if (!isInvoiceScanReady()) return;
+    setTimeout(() => {
+      if (!isInvoiceScanReady()) return;
+      const a = document.activeElement;
+      if (isTypingInOtherField(a)) return;
+      focusBarcodeInput();
+    }, 600);
+  });
+
 })();
 
 /* ══════════════════════════════════════════════════════
@@ -790,14 +1289,7 @@ function buildPrintForma() {
   }
 
   // Faktura tablisasyndaky ÄHLI doly setirler — her setir = bir agram (öýjük)
-  const items = [];
-  document.querySelectorAll('#tbody tr').forEach(tr => {
-    const id = parseInt(tr.dataset.id);
-    syncRowFromDom(id);
-    const r = rows.get(id); if (!r) return;
-    if (!r.code && !r.name) return;
-    items.push({ ...r, net: r.net });
-  });
+  const items = getItemsFromRows(true);
 
   if (items.length === 0) {
     alert('Haryt ýok — ilki haryt giriziň!');
@@ -811,11 +1303,21 @@ function buildPrintForma() {
     return false;
   }
 
-  const it = items[0];
-  const weights = items.map(x => x.net);
-  const grossWeights = items.map(x => x.gross || 0);
-  const tareWeights = items.map(x => x.tare || 0);
+  const it0 = items[0];
+  const tare0 = round3(it0.tare || 0);
+  const net0 = round3(it0.net || 0);
+  const gross0 = round3(it0.gross || (net0 + tare0));
+  const it = { ...it0, net: net0, tare: tare0, gross: gross0 };
+  // Netto / brutto — tegeklemesiz (round3 = 3 onluk, Math.round däl)
+  const weights = items.map(x => round3(x.net || 0));
+  const tareWeights = items.map(x => round3(x.tare || 0));
+  const grossWeights = items.map((x, i) => {
+    const g = round3(x.gross || 0);
+    if (g > 0) return g;
+    return round3(weights[i] + tareWeights[i]);
+  });
   const perBlock = getPrintPerBlock();
+  // Her setiriň öz Gapdaky haryt (box_qty) sanyny sakla — deňleşdirme!
   const boxQtys = items.map(x => parseBoxQty(x.box_qty, perBlock));
 
   const COLS = 15;
@@ -833,13 +1335,17 @@ function buildPrintForma() {
     const gw = grossWeights.slice(start, end);
     const tw = tareWeights.slice(start, end);
     const bq = boxQtys.slice(start, end);
+    const meta = buildSaryMetaFromBlocks(bq, COLS, MAX_ROWS, perBlock);
     const st = {
       it,
       weights: w,
       grossWeights: gw,
       tareWeights: tw,
       boxQtys: bq,
-      saryQtys: Array(COLS).fill(2),
+      saryQtys: meta.saryQtys,
+      saryMixed: meta.saryMixed,
+      saryColSums: meta.saryColSums,
+      _itemOffset: start,
       blocks: w.length,
       COLS,
       ROWS: MAX_ROWS
@@ -850,7 +1356,10 @@ function buildPrintForma() {
 
   const initBqty = pfStates.reduce((s, st) => s + st.bqty, 0);
 
-  const gramVal = it.gross > 0 ? (it.gross / 1000).toFixed(2) + ' kg' : '';
+  // Default görnüş netto — başlykda hem takyk netto (brutto saýlananda renderPfValues üýtgedýär)
+  const gramVal = it.net > 0
+    ? fmtPrintWeightHdr(it.net, 'kg')
+    : (it.gross > 0 ? fmtPrintWeightHdr(it.gross, 'kg') : '');
   const iniVal = it.width ? it.width + ' mm' : '';
   const headCode = (it.code != null ? String(it.code) : '').trim();
   const headPlu = (it.plu != null ? String(it.plu) : '').trim();
@@ -928,8 +1437,8 @@ function renderPfValues() {
   const unit = getPrintUnit();
   const weightMode = getPrintWeightMode();
   const weightLbl = weightMode === 'brutto' ? 'BRUT' : 'NET';
-  const fmt = (g) => unit === 'gr' ? String(Math.round(g)) : (g / 1000).toFixed(2);
-  const fmtHdr = (g) => unit === 'gr' ? Math.round(g) + ' gr.' : (g / 1000).toFixed(2) + ' kg';
+  const fmt = (g) => fmtPrintWeight(g, unit);
+  const fmtHdr = (g) => fmtPrintWeightHdr(g, unit);
   const unitText = unit === 'gr' ? 'gr.' : 'kg';
   document.querySelectorAll('.pf-unit-print-lbl').forEach(el => { el.textContent = unitText; });
 
@@ -947,7 +1456,7 @@ function renderPfValues() {
       for (let ri = 0; ri < ROWS; ri++) {
         if (placed >= blocks) break outer;
         grid[ri][ci] = cellWeights[placed];
-        qtyGrid[ri][ci] = boxQtys[placed] ?? 2;
+        qtyGrid[ri][ci] = boxQtys[placed] ?? getPrintPerBlock();
         placed++;
       }
     }
@@ -958,7 +1467,7 @@ function renderPfValues() {
       const cells = grid[r].map((w, ci) => {
         const on = w !== null;
         const q = qtyGrid[r][ci] || 1;
-        if (on) rowWeight += w * q;
+        if (on) rowWeight = round3(rowWeight + round3(w) * q);
         return `<td class="td-cell${on ? ' filled' : ''}">${on ? fmt(w) : ''}</td>`;
       }).join('');
       dataRows += `<tr class="pf-data-row">
@@ -970,11 +1479,21 @@ function renderPfValues() {
 
     const saryCells = Array.from({ length: COLS }, (_, ci) => {
       let hasData = false;
+      const colQs = [];
       for (let ri = 0; ri < ROWS; ri++) {
-        if (grid[ri][ci] !== null) hasData = true;
+        if (grid[ri][ci] !== null) {
+          hasData = true;
+          colQs.push(parseBoxQty(qtyGrid[ri][ci], getPrintPerBlock()));
+        }
       }
       if (!hasData) return `<td></td>`;
-      const saryVal = parseBoxQty(st.saryQtys?.[ci], 2);
+      const mixed = st.saryMixed?.[ci] || (colQs.length > 1 && colQs.some(q => q !== colQs[0]));
+      const colSum = colQs.reduce((a, b) => a + b, 0);
+      if (mixed) {
+        // Dürli rulon: 3+3+3+3+1 — bir san bilen ýalňyş görkezme
+        return `<td class="pf-sary-mixed" title="${colQs.join(' + ')} = ${colSum}"><span>${colSum}</span></td>`;
+      }
+      const saryVal = parseBoxQty(st.saryQtys?.[ci], getPrintPerBlock());
       return `<td><input class="pf-sary-in" type="number" min="1" step="1" value="${saryVal}" data-pi="${idx}" data-col="${ci}" onchange="onPfSaryInput(this)" onblur="onPfSaryInput(this)"/></td>`;
     }).join('');
 
@@ -985,9 +1504,9 @@ function renderPfValues() {
       <td class="pf-rulon-total">${pageBqty || 0}</td>
     </tr>`;
 
-    const totalNetto = weights.reduce((s, w, i) => s + w * (boxQtys[i] || 1), 0);
-    const totalBrutto = (grossWeights || []).reduce((s, w, i) => s + w * (boxQtys[i] || 1), 0);
-    const totalGilza = (tareWeights || []).reduce((s, w, i) => s + w * (boxQtys[i] || 1), 0);
+    const totalNetto = round3(weights.reduce((s, w, i) => s + w * (boxQtys[i] || 1), 0));
+    const totalBrutto = round3((grossWeights || []).reduce((s, w, i) => s + w * (boxQtys[i] || 1), 0));
+    const totalGilza = round3((tareWeights || []).reduce((s, w, i) => s + w * (boxQtys[i] || 1), 0));
     const unitLbl = unit === 'gr' ? 'gr' : 'kg';
 
     pageEl.querySelectorAll('.pf-body').forEach(b => { b.innerHTML = dataRows + saryRow; });
@@ -1012,13 +1531,31 @@ function renderPfValues() {
 function onPfSaryInput(inp) {
   const pi = parseInt(inp.dataset.pi, 10);
   const col = parseInt(inp.dataset.col, 10);
-  const qty = parseBoxQty(inp.value, 2);
+  const qty = parseBoxQty(inp.value, getPrintPerBlock());
   inp.value = qty;
   const st = pfStates[pi];
   if (!st) return;
-  if (!st.saryQtys) st.saryQtys = Array(st.COLS).fill(2);
+  if (!st.saryQtys) st.saryQtys = Array(st.COLS).fill(getPrintPerBlock());
   st.saryQtys[col] = qty;
+  if (st.saryMixed) st.saryMixed[col] = false;
+  // Diňe şol sütündäki ähli bloklar deň san — aýratyn setirler tablisada üýtgedilýär
+  const { COLS, ROWS, blocks, boxQtys } = st;
+  let placed = 0;
+  outer:
+  for (let ci = 0; ci < COLS; ci++) {
+    for (let ri = 0; ri < ROWS; ri++) {
+      if (placed >= blocks) break outer;
+      if (ci === col && boxQtys) boxQtys[placed] = qty;
+      placed++;
+    }
+  }
+  syncInvoiceBoxQtysFromPrintState(st);
+  const meta = buildSaryMetaFromBlocks(st.boxQtys, COLS, ROWS, getPrintPerBlock());
+  st.saryQtys = meta.saryQtys;
+  st.saryMixed = meta.saryMixed;
+  st.saryColSums = meta.saryColSums;
   updatePfRulonTotals(pi);
+  renderPfValues();
 }
 
 /* Öňünden görnüş — diňe ekranda, çap bilen birmeňzeş */
@@ -1076,6 +1613,7 @@ body{font-family:Arial,sans-serif;color:#000;background:#fff;-webkit-print-color
 .pf-sary-row td{background:#f5c518!important;color:#000!important;font-weight:700;font-size:9px;border-color:#000!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .pf-sary-row .td-sary-empty{background:#fff!important;border:none!important}
 .pf-sary-row .pf-sary-in{border:none;background:transparent;font-weight:700;font-size:9px;color:#000;text-align:center;width:100%;font-family:inherit}
+.pf-sary-row .pf-sary-mixed{font-weight:900;font-size:9px;text-align:center}
 .pf-unit-sel{display:none!important}
 .pf-unit-print-lbl{display:inline!important;color:#000!important;font-weight:900;font-size:10px}
 .pf-footer{display:flex;flex-wrap:wrap;gap:16px;margin-top:6px;justify-content:flex-end;font-size:9px;font-weight:700}

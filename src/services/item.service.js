@@ -3,11 +3,11 @@
 const { Op } = require('sequelize');
 const { Item } = require('../model');
 const ApiError = require('../utils/ApiError');
-const { generateEan13FromKey } = require('../utils/barcode');
+const { generateItemBarcode, generateEan13FromKey, resolveBarcodeKey } = require('../utils/barcode');
 /* ══════════════════════════════════════════════════════
    ITEM SERVICE — Harytlar Bazasy (CRUD + CSV import)
-   Barkod awtomatiki döredilmeýär — Excel import ýa-da
-   el bilen girizilen bolsa saklanýar.
+   Barkod: Kod/PLU-dan awtomatiki döreýär (Excel barkody
+   bar bolsa şol saklanýar).
 ══════════════════════════════════════════════════════ */
 function optionalStr(v) {
   if (v == null) return null;
@@ -21,14 +21,39 @@ function normalizeBarcode(v) {
   return s || null;
 }
 
+function round3(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return 0;
+  return Math.round((x + Number.EPSILON) * 1000) / 1000;
+}
+
 function normalize(data) {
+  const tare = round3(parseFloat(data.tare) || 0);
+  let gram = parseFloat(data.gram);
+  if (!Number.isFinite(gram)) gram = 0;
+  gram = Math.max(0, round3(gram));
+
+  const nettoRaw = data.netto != null ? String(data.netto).trim() : '';
+  const netRaw = data.net != null ? String(data.net).trim() : '';
+  const bruttoRaw = data.brutto != null ? String(data.brutto).trim() : '';
+
+  // Import: Netto + Gilza → Brutto (gram) — tegeklemeýär, 3 onluk saklaýar
+  if (nettoRaw !== '' || netRaw !== '') {
+    const net = parseFloat(nettoRaw !== '' ? nettoRaw : netRaw) || 0;
+    gram = Math.max(0, round3(net + tare));
+  } else if (bruttoRaw !== '' && gram === 0) {
+    gram = Math.max(0, round3(parseFloat(bruttoRaw) || 0));
+  } else if (gram > 0 && tare > 0 && nettoRaw === '' && netRaw === '' && bruttoRaw === '') {
+    // gram eýýäm brutto bolup saklanan
+  }
+
   const n = {
     plu: String(data.plu || '').trim() || null,
     name: String(data.name || '').trim(),
-    gram: parseInt(data.gram, 10) || 0,
+    gram,
     mm: parseInt(data.mm, 10) || 0,
-    code: data.code != null ? String(data.code).trim() : null,
-    tare: parseFloat(data.tare) || 0,
+    code: data.code != null ? normalizeImportCode(data.code) || String(data.code).trim() : null,
+    tare: Math.max(0, tare),
     mode: optionalStr(data.mode),
     self: optionalStr(data.self),
     label: optionalStr(data.label),
@@ -40,15 +65,30 @@ function normalize(data) {
   return n;
 }
 
+/* Excel sanlary: "340.0" / "3.4e2" → "340" (öýjük san görnüşinde bolsa) */
+function normalizeImportCode(code) {
+  let s = String(code == null ? '' : code).trim();
+  if (!s) return '';
+  if (/^\d+[.,]\d+$/.test(s)) {
+    const n = Number(s.replace(',', '.'));
+    if (Number.isFinite(n) && Math.floor(n) === n) s = String(n);
+  } else if (/^\d+\.?\d*e[+-]?\d+$/i.test(s)) {
+    const n = Number(s);
+    if (Number.isFinite(n)) s = String(Math.round(n));
+  }
+  return s.trim();
+}
+
 /* Kod deňeşdirme: "00340" we "340" bir haryt */
 function codeLookupKeys(code) {
-  const raw = String(code || '').trim();
+  const raw = normalizeImportCode(code);
   if (!raw) return [];
   const digits = raw.replace(/\D/g, '');
   const keys = new Set([raw]);
   if (digits) {
     keys.add(digits);
-    keys.add(String(parseInt(digits, 10)));
+    const asInt = String(parseInt(digits, 10));
+    if (Number.isFinite(parseInt(digits, 10))) keys.add(asInt);
     keys.add(digits.padStart(5, '0'));
   }
   return [...keys];
@@ -72,6 +112,9 @@ function mergeImportRow(existing, raw) {
   }
   if (Object.prototype.hasOwnProperty.call(raw, 'barcode')) {
     out.barcode = n.barcode;
+  }
+  if (!out.barcode) {
+    out.barcode = generateItemBarcode({ code: out.code, plu: out.plu, gram: 0 });
   }
   if (!out.name) out.name = String(out.plu || out.code || 'Haryt');
   return out;
@@ -97,41 +140,107 @@ function isLegacyGeneratedBarcode(item) {
   return false;
 }
 
-/* Serwer başlangyçda — forma arkaly döredilen köne awto-barkodlary pozýar */
+/* Serwer başlangyçda — köne awto-barkod arassalama öçürildi
+   (täze algoritm Kod/PLU-dan dogry barkod döredýär) */
 async function clearLegacyGeneratedBarcodes() {
-  const items = await Item.findAll({
-    where: { barcode: { [Op.and]: [{ [Op.ne]: null }, { [Op.ne]: '' }] } },
-  });
-  let cleared = 0;
-  for (const item of items) {
-    if (!isLegacyGeneratedBarcode(item)) continue;
-    await item.update({ barcode: null });
-    cleared += 1;
-  }
-  if (cleared > 0) {
-    console.log(`✓ Köne awto-barkodlar arassalandy: ${cleared} haryt`);
-  }
-  return cleared;
+  return 0;
 }
 
-async function list(search) {
+async function list(search, { limit = 200, offset = 0 } = {}) {
   const where = {};
   if (search) {
-    const q = `%${search}%`;
-    where[Op.or] = [
-      { plu: { [Op.iLike]: q } },
-      { code: { [Op.iLike]: q } },
-      { name: { [Op.iLike]: q } },
-      { barcode: { [Op.iLike]: q } },
-    ];
+    const q = String(search).trim();
+    if (q) {
+      // Prefiks gözleg — indeksiň peýdasy bar; `%foo%` uly bazada haýal
+      const like = `${q}%`;
+      const contains = `%${q}%`;
+      where[Op.or] = [
+        { code: { [Op.iLike]: like } },
+        { barcode: { [Op.iLike]: like } },
+        { plu: { [Op.iLike]: like } },
+        { name: { [Op.iLike]: contains } },
+        { code: { [Op.iLike]: contains } },
+        { barcode: { [Op.iLike]: contains } },
+        { plu: { [Op.iLike]: contains } },
+      ];
+    }
   }
-  return Item.findAll({ where, order: [['id', 'ASC']] });
+
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500);
+  const safeOffset = Math.max(parseInt(offset, 10) || 0, 0);
+
+  const { rows, count } = await Item.findAndCountAll({
+    where,
+    order: [['id', 'ASC']],
+    limit: safeLimit,
+    offset: safeOffset,
+  });
+
+  return {
+    items: rows,
+    total: count,
+    limit: safeLimit,
+    offset: safeOffset,
+  };
+}
+
+/* Skan/gozleg — bir haryt tap (barkod / kod / PLU) */
+async function lookup(query) {
+  const q = String(query || '').replace(/\s/g, '').trim();
+  if (!q) return null;
+
+  let item = await Item.findOne({ where: { barcode: q } });
+  if (item) return item;
+
+  item = await findByCodeLoose(q);
+  if (item) return item;
+
+  item = await Item.findOne({ where: { plu: q } });
+  if (item) return item;
+
+  // Agramly barkoddan kod bölegi (00 + 5 kod + …)
+  if (/^\d{13}$/.test(q) && (q.startsWith('00') || /^2[0-9]/.test(q))) {
+    const key = q.slice(2, 7);
+    item = await findByCodeLoose(key);
+    if (item) return item;
+    item = await Item.findOne({ where: { plu: key } });
+  }
+  return item;
+}
+
+/* Iň uly sanly Kod + 1 — bazadaky format saklanýar ("0000421" → "0000422", "421" → "422") */
+async function nextCode(fallback = 1) {
+  const rows = await Item.findAll({ attributes: ['code'], raw: true });
+  let maxNum = 0;
+  let pad = 0;
+  for (const row of rows) {
+    const digits = String(row.code || '').replace(/\D/g, '');
+    if (!digits) continue;
+    const n = parseInt(digits, 10);
+    if (!Number.isFinite(n)) continue;
+    if (n > maxNum || (n === maxNum && digits.length > pad)) {
+      maxNum = n;
+      pad = digits.length;
+    }
+  }
+  const next = String((maxNum > 0 ? maxNum : fallback - 1) + 1);
+  return pad > next.length ? next.padStart(pad, '0') : next;
 }
 
 async function getById(id) {
   const item = await Item.findByPk(id);
   if (!item) throw ApiError.notFound('Haryt tapylmady');
   return item;
+}
+
+function ensureBarcode(n) {
+  if (n.barcode) return n;
+  n.barcode = generateItemBarcode({
+    code: n.code,
+    plu: n.plu,
+    gram: 0,
+  });
+  return n;
 }
 
 async function create(data) {
@@ -142,8 +251,7 @@ async function create(data) {
   const exists = await Item.findOne({ where: { code: n.code } });
   if (exists) throw ApiError.conflict(`Kod ${n.code} eýýäm bar`);
 
-  if (!Object.prototype.hasOwnProperty.call(n, 'barcode')) n.barcode = null;
-  else if (isLegacyGeneratedBarcode({ ...n, barcode: n.barcode })) n.barcode = null;
+  ensureBarcode(n);
   return Item.create(n);
 }
 
@@ -158,6 +266,14 @@ async function update(id, data) {
     const dup = await Item.findOne({ where: { code: n.code } });
     if (dup && dup.id !== item.id) throw ApiError.conflict(`Kod ${n.code} eýýäm bar`);
   }
+
+  // Barkod boş bolsa ýa-da kod üýtgän bolsa — täzeden döret
+  const codeChanged = String(n.code || '') !== String(item.code || '');
+  const pluChanged = String(n.plu || '') !== String(item.plu || '');
+  if (!n.barcode || codeChanged || (pluChanged && !resolveBarcodeKey(n.code, null))) {
+    n.barcode = generateItemBarcode({ code: n.code, plu: n.plu, gram: 0 });
+  }
+
   await item.update(n);
   return item;
 }
@@ -168,35 +284,121 @@ async function remove(id) {
   return { id: Number(id) };
 }
 
-/* CSV/Excel import — Kod boýunça upsert (00340 = 340) */
+function rememberItemCodes(byCode, item) {
+  for (const k of codeLookupKeys(item.code)) byCode.set(k, item);
+}
+
+function findInCodeMap(byCode, code) {
+  for (const k of codeLookupKeys(code)) {
+    if (byCode.has(k)) return byCode.get(k);
+  }
+  return null;
+}
+
+/* CSV/Excel import — Kod boýunça upsert.
+   Faýl içindäki gaýtalanmalar we "00340"/"340" birleşdirilýär;
+   unique constraint ýalňyşlygy update-e öwrülýär. */
+/* Import: kod Excel-däki ýaly ýazylýar; şol kod başga harytda bar bolsa köne kod galýar */
+async function updateWithFileCode(item, merged, fileCode) {
+  const oldCode = item.code;
+  merged.code = fileCode || oldCode;
+  try {
+    await item.update(merged);
+  } catch (err) {
+    if (err.name !== 'SequelizeUniqueConstraintError' || merged.code === oldCode) throw err;
+    merged.code = oldCode;
+    await item.update(merged);
+  }
+}
+
 async function bulkUpsert(rows) {
   let added = 0;
   let updated = 0;
   let skipped = 0;
 
-  for (const raw of rows) {
-    const code = raw.code != null ? String(raw.code).trim() : '';
-    if (!code) { skipped += 1; continue; }
+  const existing = await Item.findAll();
+  const byCode = new Map();
+  for (const it of existing) rememberItemCodes(byCode, it);
 
-    const existing = await findByCodeLoose(code);
-    if (existing) {
-      const merged = mergeImportRow(existing, raw);
-      // Kod formatyny bazadaky sakla (00340 ýaly)
-      merged.code = existing.code;
-      await existing.update(merged);
+  // Bir faýlda bir kod bir gezek: soňky setir üstünlikli
+  const uniqueRows = [];
+  const seenFileKeys = new Map();
+  for (const raw of rows) {
+    const code = normalizeImportCode(raw && raw.code);
+    if (!code) { skipped += 1; continue; }
+    const payload = { ...raw, code };
+    let idx = -1;
+    for (const k of codeLookupKeys(code)) {
+      if (seenFileKeys.has(k)) { idx = seenFileKeys.get(k); break; }
+    }
+    if (idx >= 0) {
+      uniqueRows[idx] = payload;
+      for (const k of codeLookupKeys(code)) seenFileKeys.set(k, idx);
+    } else {
+      idx = uniqueRows.length;
+      uniqueRows.push(payload);
+      for (const k of codeLookupKeys(code)) seenFileKeys.set(k, idx);
+    }
+  }
+
+  const toCreate = [];
+
+  for (const raw of uniqueRows) {
+    const found = findInCodeMap(byCode, raw.code);
+    if (found) {
+      await updateWithFileCode(found, mergeImportRow(found, raw), raw.code);
+      rememberItemCodes(byCode, found);
       updated += 1;
     } else {
       const n = normalize(raw);
+      n.code = normalizeImportCode(n.code) || n.code;
       if (!n.name) n.name = String(n.plu || n.code);
-      if (!Object.prototype.hasOwnProperty.call(n, 'barcode')) n.barcode = null;
-      else if (isLegacyGeneratedBarcode({ ...n, barcode: n.barcode })) n.barcode = null;
-      await Item.create(n);
-      added += 1;
+      ensureBarcode(n);
+      toCreate.push(n);
     }
   }
+
+  const CHUNK = 50;
+  for (let i = 0; i < toCreate.length; i += CHUNK) {
+    const chunk = toCreate.slice(i, i + CHUNK);
+    try {
+      const created = await Item.bulkCreate(chunk, { returning: true });
+      added += created.length;
+      for (const it of created) rememberItemCodes(byCode, it);
+    } catch (err) {
+      if (err.name !== 'SequelizeUniqueConstraintError') throw err;
+      // Gaýtalanma — her setiri aýratyn upsert et
+      for (const n of chunk) {
+        const again = findInCodeMap(byCode, n.code) || await findByCodeLoose(n.code);
+        if (again && again.id) {
+          await updateWithFileCode(again, mergeImportRow(again, n), n.code);
+          rememberItemCodes(byCode, again);
+          updated += 1;
+        } else {
+          try {
+            const created = await Item.create(n);
+            added += 1;
+            rememberItemCodes(byCode, created);
+          } catch (e2) {
+            if (e2.name !== 'SequelizeUniqueConstraintError') throw e2;
+            const row = await findByCodeLoose(n.code);
+            if (row) {
+              await updateWithFileCode(row, mergeImportRow(row, n), n.code);
+              rememberItemCodes(byCode, row);
+              updated += 1;
+            } else {
+              skipped += 1;
+            }
+          }
+        }
+      }
+    }
+  }
+
   return { added, updated, skipped, total: rows.length };
 }
 
 module.exports = {
   list, getById, create, update, remove, bulkUpsert, clearLegacyGeneratedBarcodes,
+  lookup, findByCodeLoose, nextCode,
 };

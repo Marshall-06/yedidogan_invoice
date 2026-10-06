@@ -1,7 +1,13 @@
 node_modules/
 .env
 *.log
+server.stop
+server-error.log
 npm-debug.log*
 .DS_Store
 coverage/
 dist/
+data/items-sync.json
+backups/
+*.exe
+yedidogan-zawod*.exe

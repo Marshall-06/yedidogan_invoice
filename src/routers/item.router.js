@@ -53,6 +53,8 @@ const router = Router();
  *         description: Bu PLU eýýäm bar
  */
 router.get('/', ctrl.list);
+router.get('/lookup', ctrl.lookup);
+router.get('/next-code', ctrl.nextCode);
 
 /**
  * @swagger

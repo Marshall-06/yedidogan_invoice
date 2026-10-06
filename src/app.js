@@ -23,7 +23,7 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false }));
 
 if (config.env !== 'test') {
@@ -36,7 +36,9 @@ if (config.env !== 'test') {
 const FRONTEND_DIR = path.join(__dirname, '..');
 app.use('/css', express.static(path.join(FRONTEND_DIR, 'css')));
 app.use('/js',  express.static(path.join(FRONTEND_DIR, 'js')));
-app.get("/", (_req, res) => res.sendFile(path.join(FRONTEND_DIR, 'index.html')));
+app.use('/assets', express.static(path.join(FRONTEND_DIR, 'assets')));
+app.use('/public', express.static(path.join(FRONTEND_DIR, 'public')));
+app.get('/', (_req, res) => res.sendFile(path.join(FRONTEND_DIR, 'index.html')));
 
 /* ── Swagger API dokumentasiýasy ── */
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {

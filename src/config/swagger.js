@@ -86,7 +86,7 @@ const options = {
             id: { type: 'integer', example: 1 },
             plu: { type: 'string', example: '21025' },
             name: { type: 'string', example: 'Duýgy_Direg zefir 17gr' },
-            gram: { type: 'integer', example: 214 },
+            gram: { type: 'number', example: 152.508 },
             mm: { type: 'integer', example: 140 },
             code: { type: 'string', example: 'S22' },
             tare: { type: 'string', example: '30' },
@@ -103,7 +103,7 @@ const options = {
           properties: {
             plu: { type: 'string', example: '21025' },
             name: { type: 'string', example: 'Duýgy_Direg zefir 17gr' },
-            gram: { type: 'integer', example: 214 },
+            gram: { type: 'number', example: 152.508 },
             mm: { type: 'integer', example: 140 },
             code: { type: 'string', example: 'S22' },
             tare: { type: 'number', example: 30 },

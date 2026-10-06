@@ -13,7 +13,7 @@ const Item = sequelize.define(
     // PLU indi hökmany däl (boş bolup biler)
     plu: { type: DataTypes.STRING, allowNull: true },
     name: { type: DataTypes.STRING, allowNull: false },
-    gram: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },     // Brutto agram (g)
+    gram: { type: DataTypes.DECIMAL(12, 3), allowNull: false, defaultValue: 0 }, // Brutto agram (g)
     mm: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },       // Ini / Width (mm)
     // Kod (yonekey) — esasy identifikator, hökmany we unique
     code: { type: DataTypes.STRING, allowNull: false, unique: true },         // Kod
@@ -26,7 +26,7 @@ const Item = sequelize.define(
   },
   {
     tableName: 'items',
-    indexes: [{ fields: ['code'] }, { fields: ['barcode'] }, { fields: ['plu'] }],
+    indexes: [{ fields: ['code'] }, { fields: ['barcode'] }, { fields: ['plu'] }, { fields: ['name'] }],
   }
 );
 

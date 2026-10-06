@@ -5,22 +5,32 @@
   "bin": "src/cmd/server.js",
   "pkg": {
     "assets": [
-      ".env",
       "index.html",
       "css/**/*",
       "js/**/*",
       "public/**/*",
+      "assets/**/*",
       "src/views/**/*",
       "src/config/**/*",
+      "scripts/**/*",
+      "sql/**/*",
       "src/models/**/*",
       "src/routers/**/*",
       "node_modules/swagger-ui-dist/**/*"
     ]
   },
   "scripts": {
-    "start": "node src/cmd/server.js",
+    "start": "nodemon src/cmd/server.js",
+    "start:prod": "node src/cmd/server.js",
+    "dev": "node --watch --watch-path=src src/cmd/server.js",
     "fix-db": "node scripts/drop-invoice-plu-fk.js",
-    "build:exe": "pkg . --targets node18-win-x64 --output yedidogan-zawod.exe"
+    "init-db": "node scripts/init-database.js",
+    "repair-db": "node scripts/repair-database.js",
+    "export-items": "node scripts/export-items.js",
+    "import-items": "node scripts/import-items.js",
+    "check-items": "node scripts/check-items.js",
+    "build:exe": "pkg . --targets node16-win-x64 --output yedidogan-zawod.exe",
+    "build:exe:modern": "pkg . --targets node18-win-x64 --output yedidogan-zawod.exe"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -38,6 +48,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "nodemon": "^3.1.14",
     "pkg": "^5.8.1"
   }
-}
+} 
