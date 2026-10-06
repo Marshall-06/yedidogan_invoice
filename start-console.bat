@@ -45,7 +45,7 @@ set EC=%ERRORLEVEL%
 
 echo.
 if %EC% NEQ 0 (
-  echo [X] Serwer ýalňyşlyk bilen ýapyldy (code %EC%)
+  echo [X] Serwer ýalňyşlyk bilen ýapyldy, code %EC%
   echo     server-error.log barlaň
 ) else (
   echo Serwer ýapyldy.

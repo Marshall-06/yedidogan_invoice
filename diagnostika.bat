@@ -59,12 +59,17 @@ echo.
 
 echo --- 6) Soňky loglar ---
 if exist "server-error.log" (
-  echo --- server-error.log (soňky 15 setir) ---
+  echo --- server-error.log ^(soňky 15 setir^) ---
   powershell -NoProfile -Command "Get-Content 'server-error.log' -Tail 15 -ErrorAction SilentlyContinue"
   echo.
 )
+if exist "server-console.log" (
+  echo --- server-console.log ^(soňky 15 setir^) ---
+  powershell -NoProfile -Command "Get-Content 'server-console.log' -Tail 15 -ErrorAction SilentlyContinue"
+  echo.
+)
 if exist "server.log" (
-  echo --- server.log (soňky 10 setir) ---
+  echo --- server.log ^(soňky 10 setir^) ---
   powershell -NoProfile -Command "Get-Content 'server.log' -Tail 10 -ErrorAction SilentlyContinue"
   echo.
 )

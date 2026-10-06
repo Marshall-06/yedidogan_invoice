@@ -37,7 +37,7 @@ if not exist "%~dp0.env" (
 
 net session >nul 2>&1
 if errorlevel 1 (
-  echo [!] Run as administrator (sag bas → Run as administrator)
+  echo [!] Admin hukugy gerek: sag bas - Run as administrator
   pause
   exit /b 1
 )

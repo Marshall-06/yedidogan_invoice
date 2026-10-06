@@ -20,7 +20,7 @@ if not errorlevel 1 (
 )
 if not defined STARTED (
   echo [!] Windows Task tapylmady ýa-da Admin däl — serwer şu ulanyjyda başlaýar
-  echo     (ulanyjy çyksa serwer durar; install-autostart.bat-y Admin bilen işlediň)
+  echo     ulanyjy çyksa serwer durar - install-autostart.bat-y Admin bilen işlediň
   start "" /MIN cmd.exe /c ""%~dp0start-loop.bat""
 )
 
