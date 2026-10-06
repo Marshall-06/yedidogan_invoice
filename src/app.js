@@ -27,7 +27,10 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false }));
 
 if (config.env !== 'test') {
-  app.use(morgan(config.env === 'development' ? 'dev' : 'combined'));
+  // Production: diňe ýalňyş jogaplar loga ýazylýar (log faýly disk doldurmasyn)
+  app.use(config.env === 'development'
+    ? morgan('dev')
+    : morgan('combined', { skip: (req, res) => res.statusCode < 400 }));
 }
 
 /* ── Frontend (statik) — backend bilen BIR origin-den hyzmat edýär,
